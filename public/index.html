@@ -3,691 +3,729 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - DompetKu</title>
+    <title>DompetKu HQ - Command Center</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { background: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
-        .glass { background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); }
-        .tab-content { display: none; }
-        .tab-active { display: block; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        #logArea::-webkit-scrollbar { width: 4px; }
-        #logArea::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
-        .toast { animation: slideIn 0.3s ease; }
-        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .loading { position: relative; pointer-events: none; }
-        .loading::after { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        
+        body { 
+            background: #0f172a; 
+            color: #e2e8f0; 
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        /* Toggle Switch Modern */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #10b981;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #10b981;
+        }
+        
+        /* Terminal Styling */
+        .terminal {
+            font-family: 'JetBrains Mono', monospace;
+            background: #020617;
+        }
+        .terminal-line {
+            animation: fadeIn 0.2s ease;
+            border-left: 2px solid transparent;
+            padding-left: 8px;
+        }
+        .terminal-line:hover {
+            background: rgba(30, 41, 59, 0.5);
+            border-left-color: #10b981;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b; 
+        }
+        
+        .status-dot {
+            box-shadow: 0 0 12px currentColor;
+        }
     </style>
 </head>
-<body class="flex flex-col md:flex-row min-h-screen">
+<body class="min-h-screen flex flex-col md:flex-row">
 
-    <!-- Toast Notification Container -->
-    <div id="toastContainer" class="fixed top-4 right-4 z-50 space-y-2"></div>
+    <!-- Toast Container -->
+    <div id="toastContainer" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
 
     <!-- Sidebar -->
-    <aside class="hidden md:flex flex-col w-64 glass p-6 fixed h-full z-40">
-        <div class="mb-10">
-            <h1 class="text-2xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">DompetKu</h1>
-            <p class="text-[10px] tracking-widest text-slate-500 uppercase font-bold">Admin</p>
+    <aside class="w-full md:w-64 glass border-r border-slate-700/50 flex flex-col h-screen sticky top-0">
+        <div class="p-6 border-b border-slate-700/50">
+            <h1 class="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
+                DompetKu
+            </h1>
+            <p class="text-xs text-slate-500 mt-1 uppercase tracking-wider">Command Center</p>
         </div>
-        
-        <nav class="space-y-3 flex-1">
-            <button onclick="switchTab('overview')" id="btn-overview" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl bg-slate-800 text-white transition-all">
-                <i data-lucide="layout-dashboard" class="w-5"></i> Overview
+
+        <nav class="flex-1 p-4 space-y-2">
+            <button onclick="switchTab('overview')" id="nav-overview" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 transition-all">
+                <i data-lucide="activity" class="w-5 h-5"></i>
+                <span class="font-medium">Overview</span>
             </button>
-            <button onclick="switchTab('users')" id="btn-users" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition-all">
-                <i data-lucide="database" class="w-5"></i> Database
+            
+            <button onclick="switchTab('database')" id="nav-database" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-800/50 text-slate-400 transition-all">
+                <i data-lucide="database" class="w-5 h-5"></i>
+                <span class="font-medium">Database</span>
             </button>
-            <button onclick="switchTab('broadcast')" id="btn-broadcast" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition-all">
-                <i data-lucide="megaphone" class="w-5"></i> Broadcast
+            
+            <button onclick="switchTab('broadcast')" id="nav-broadcast" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-800/50 text-slate-400 transition-all">
+                <i data-lucide="megaphone" class="w-5 h-5"></i>
+                <span class="font-medium">Broadcast</span>
             </button>
-            <button onclick="switchTab('upgrades')" id="btn-upgrades" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition-all relative">
-                <i data-lucide="trending-up" class="w-5"></i> Upgrade Requests
-                <span id="upgradeBadge" class="hidden absolute right-2 top-2 w-2 h-2 bg-red-500 rounded-full"></span>
+            
+            <button onclick="switchTab('terminal')" id="nav-terminal" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-800/50 text-slate-400 transition-all">
+                <i data-lucide="terminal" class="w-5 h-5"></i>
+                <span class="font-medium">Terminal</span>
+                <span id="logBadge" class="hidden ml-auto bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full">LIVE</span>
             </button>
         </nav>
 
-        <button onclick="logout()" class="flex items-center gap-3 p-3 text-red-400 hover:bg-red-500/10 rounded-xl transition">
-            <i data-lucide="log-out" class="w-5"></i> Logout
-        </button>
+        <div class="p-4 border-t border-slate-700/50 space-y-3">
+            <!-- WA Status Mini -->
+            <div class="glass rounded-lg p-3">
+                <div class="flex items-center gap-2 mb-2">
+                    <div id="waDot" class="w-2 h-2 rounded-full bg-yellow-500 status-dot"></div>
+                    <span id="waText" class="text-xs font-medium text-slate-300">Connecting...</span>
+                </div>
+                <button onclick="reconnectWA()" class="w-full text-[10px] bg-slate-800 hover:bg-slate-700 py-1.5 rounded transition">
+                    Force Reconnect
+                </button>
+            </div>
+            
+            <button onclick="logout()" class="w-full flex items-center gap-3 px-4 py-2 rounded-xl text-red-400 hover:bg-red-500/10 transition-all text-sm">
+                <i data-lucide="log-out" class="w-4 h-4"></i>
+                <span>Logout</span>
+            </button>
+        </div>
     </aside>
 
-    <!-- Mobile Header -->
-    <div class="md:hidden glass p-4 flex justify-between items-center sticky top-0 z-30">
-        <h1 class="text-xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">DompetKu HQ</h1>
-        <button onclick="document.querySelector('aside').classList.toggle('hidden'); document.querySelector('aside').classList.toggle('fixed'); document.querySelector('aside').classList.toggle('inset-0');" class="p-2">
-            <i data-lucide="menu" class="w-6"></i>
-        </button>
-    </div>
-
-    <main class="flex-1 md:ml-64 p-6 md:p-10 space-y-8">
-
-        <!-- Maintenance Banner -->
-        <div id="maintBanner" class="hidden glass p-4 rounded-2xl flex items-center justify-between border-l-4 border-yellow-500 mb-6">
-            <div class="flex items-center gap-3">
-                <i data-lucide="alert-triangle" class="text-yellow-500 w-5"></i>
-                <div>
-                    <p class="text-xs font-bold uppercase tracking-widest text-yellow-500">Mode Perbaikan Aktif</p>
-                    <p class="text-[10px] text-slate-400">Sistem sedang maintenance, bot tidak merespon pesan</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Header Section -->
-        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-                <h2 id="tabTitle" class="text-3xl font-bold">Overview</h2>
-                <div class="flex items-center gap-4 mt-2">
-                    <div id="botStatus" class="flex items-center gap-2 text-sm text-slate-400">
-                        <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
-                        <span id="statusText">Menghubungkan...</span>
-                    </div>
-                    <button onclick="toggleMaintenance()" id="maintBtn" class="text-xs px-3 py-1 rounded-full bg-slate-800 hover:bg-slate-700 transition border border-slate-700">
-                        Maintenance: OFF
-                    </button>
-                </div>
-            </div>
-            <div id="qrContainer" class="hidden glass p-4 rounded-2xl bg-white">
-                <div id="qrArea" class="w-40 h-40 flex items-center justify-center bg-slate-100 rounded-lg"></div>
-                <p class="text-[10px] text-slate-900 font-bold text-center mt-2">SCAN WHATSAPP</p>
-            </div>
-        </div>
-
-        <!-- OVERVIEW TAB -->
-        <div id="tab-overview" class="tab-content tab-active space-y-6">
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div class="glass p-6 rounded-2xl">
-                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest">Total Users</p>
-                    <h3 id="stat-total" class="text-3xl font-bold mt-2">0</h3>
-                </div>
-                <div class="glass p-6 rounded-2xl border-l-4 border-green-500">
-                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest text-green-400">User PRO</p>
-                    <h3 id="stat-pro" class="text-3xl font-bold mt-2">0</h3>
-                </div>
-                <div class="glass p-6 rounded-2xl border-l-4 border-blue-500">
-                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest text-blue-400">User DEMO</p>
-                    <h3 id="stat-demo" class="text-3xl font-bold mt-2">0</h3>
-                </div>
-                <div class="glass p-6 rounded-2xl">
-                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest">Pending Requests</p>
-                    <h3 id="stat-pending" class="text-3xl font-bold mt-2">0</h3>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div class="glass p-6 rounded-2xl">
-                    <h4 class="text-sm font-bold text-slate-500 mb-6 uppercase">Statistik 7 Hari</h4>
-                    <canvas id="trafficChart" height="200"></canvas>
-                </div>
-                <div class="bg-black border border-slate-800 rounded-2xl flex flex-col overflow-hidden">
-                    <div class="bg-slate-900 px-4 py-2 border-b border-slate-800 flex items-center justify-between">
-                        <div class="flex items-center gap-2">
-                            <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                            <span class="text-[10px] font-mono text-slate-500">live_activity.log</span>
-                        </div>
-                        <button onclick="clearLogs()" class="text-[10px] text-slate-500 hover:text-white">Clear</button>
-                    </div>
-                    <div id="logArea" class="p-4 flex-1 h-[250px] overflow-y-auto font-mono text-[11px] space-y-1">
-                        <div class="text-slate-600">[SYSTEM] Dashboard initialized...</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- USERS TAB -->
-        <div id="tab-users" class="tab-content space-y-6">
-            <div class="flex justify-between items-center">
-                <h3 class="text-xl font-bold">User Management</h3>
-                <div class="flex gap-2">
-                    <input type="text" id="searchUser" placeholder="Cari user..." onkeyup="filterUsers()" class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-green-500">
+    <!-- Main Content -->
+    <main class="flex-1 p-4 md:p-8 overflow-auto h-screen">
+        
+        <!-- Header Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="glass rounded-2xl p-4 border-l-4 border-emerald-500">
+                <p class="text-slate-400 text-[10px] uppercase font-bold tracking-wider">Health</p>
+                <div class="flex items-end gap-2 mt-1">
+                    <span id="healthStatus" class="text-xl font-bold text-emerald-400">Checking...</span>
                 </div>
             </div>
             
+            <div class="glass rounded-2xl p-4 border-l-4 border-blue-500">
+                <p class="text-slate-400 text-[10px] uppercase font-bold tracking-wider">Total Users</p>
+                <p id="statTotal" class="text-2xl font-bold text-white mt-1">-</p>
+            </div>
+            
+            <div class="glass rounded-2xl p-4 border-l-4 border-purple-500">
+                <p class="text-slate-400 text-[10px] uppercase font-bold tracking-wider">Memory</p>
+                <div class="mt-2">
+                    <div class="flex justify-between text-[10px] mb-1">
+                        <span id="memText">-</span>
+                        <span id="memPercent" class="text-purple-400">-%</span>
+                    </div>
+                    <div class="w-full bg-slate-800 rounded-full h-1.5">
+                        <div id="memBar" class="bg-purple-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass rounded-2xl p-4 border-l-4 border-orange-500">
+                <p class="text-slate-400 text-[10px] uppercase font-bold tracking-wider">WA Status</p>
+                <p id="waStatusMini" class="text-lg font-bold text-white mt-1">-</p>
+            </div>
+        </div>
+
+        <!-- TAB: OVERVIEW -->
+        <div id="tab-overview" class="tab-content space-y-6">
+            <div class="glass rounded-2xl p-6">
+                <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <i data-lucide="smartphone" class="w-5 h-5 text-emerald-400"></i>
+                    WhatsApp Connection
+                </h2>
+                
+                <!-- QR Container -->
+                <div id="qrContainer" class="hidden flex flex-col items-center justify-center p-8 bg-white/5 rounded-xl border-2 border-dashed border-slate-700 mb-4">
+                    <div id="qrImage" class="w-48 h-48 bg-white p-2 rounded-lg mb-3"></div>
+                    <p class="text-sm text-slate-300">Scan dengan WhatsApp</p>
+                    <p class="text-xs text-slate-500 mt-1">Session tersimpan otomatis ke database</p>
+                </div>
+
+                <!-- Connected State -->
+                <div id="connectedState" class="hidden flex items-center justify-between p-4 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                            <i data-lucide="check" class="w-5 h-5 text-emerald-400"></i>
+                        </div>
+                        <div>
+                            <p class="text-emerald-400 font-semibold">Connected & Persistent</p>
+                            <p class="text-xs text-slate-400">Session aktif di database</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-xs text-slate-500">Uptime</p>
+                        <p id="uptimeText" class="text-lg font-mono font-bold">00:00:00</p>
+                    </div>
+                </div>
+
+                <!-- Disconnected State -->
+                <div id="disconnectedState" class="flex items-center justify-between p-4 bg-red-500/10 rounded-xl border border-red-500/30">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
+                            <i data-lucide="alert-circle" class="w-5 h-5 text-red-400"></i>
+                        </div>
+                        <div>
+                            <p class="text-red-400 font-semibold">Disconnected</p>
+                            <p class="text-xs text-slate-400">Menunggu koneksi...</p>
+                        </div>
+                    </div>
+                    <button onclick="reconnectWA()" class="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-lg text-sm font-medium transition">
+                        Reconnect
+                    </button>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button onclick="switchTab('broadcast')" class="glass rounded-2xl p-6 text-left hover:bg-slate-800/50 transition group">
+                    <div class="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition">
+                        <i data-lucide="megaphone" class="w-6 h-6 text-blue-400"></i>
+                    </div>
+                    <h3 class="font-semibold text-lg">Broadcast</h3>
+                    <p class="text-sm text-slate-400 mt-1">Kirim pesan ke user berdasarkan filter</p>
+                </button>
+                
+                <button onclick="toggleMaintenance()" class="glass rounded-2xl p-6 text-left hover:bg-slate-800/50 transition group">
+                    <div class="w-12 h-12 rounded-xl bg-orange-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition">
+                        <i data-lucide="wrench" class="w-6 h-6 text-orange-400"></i>
+                    </div>
+                    <h3 class="font-semibold text-lg">Maintenance</h3>
+                    <p class="text-sm text-slate-400 mt-1" id="maintText">Mode normal aktif</p>
+                </button>
+            </div>
+        </div>
+
+        <!-- TAB: DATABASE -->
+        <div id="tab-database" class="tab-content hidden space-y-6">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                    <h2 class="text-2xl font-bold">User Database</h2>
+                    <p class="text-sm text-slate-400">Kelola status user dengan toggle switch</p>
+                </div>
+                <div class="flex gap-2 w-full sm:w-auto">
+                    <input type="text" id="searchInput" placeholder="Cari nama/WA..." 
+                        class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-emerald-500 w-full sm:w-64"
+                        onkeyup="debounce(loadUsers, 300)()">
+                    <select id="filterStatus" onchange="loadUsers()" class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                        <option value="all">Semua</option>
+                        <option value="demo">Demo</option>
+                        <option value="pro">Pro</option>
+                        <option value="unlimited">Unlimited</option>
+                    </select>
+                </div>
+            </div>
+
             <div class="glass rounded-2xl overflow-hidden">
                 <div class="overflow-x-auto">
-                    <table class="w-full text-left border-collapse">
-                        <thead class="bg-slate-800/50 text-[10px] uppercase text-slate-500 font-bold">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-900/50 text-xs uppercase text-slate-400 font-semibold">
                             <tr>
-                                <th class="p-4">Nama Toko</th>
+                                <th class="p-4">Toko</th>
                                 <th class="p-4">WhatsApp</th>
                                 <th class="p-4">Status</th>
-                                <th class="p-4">Tanggal Daftar</th>
-                                <th class="p-4 text-right">Aksi</th>
+                                <th class="p-4">Aksi Cepat</th>
                             </tr>
                         </thead>
-                        <tbody id="userTable" class="text-sm"></tbody>
+                        <tbody id="userTable" class="text-sm divide-y divide-slate-800/50">
+                            <tr>
+                                <td colspan="4" class="p-8 text-center text-slate-500">
+                                    <div class="animate-pulse">Memuat data...</div>
+                                </td>
+                            </tr>
+                        </tbody>
                     </table>
+                </div>
+                <div class="p-4 border-t border-slate-800 flex justify-between items-center bg-slate-900/30">
+                    <span id="paginationInfo" class="text-xs text-slate-400">Memuat...</span>
+                    <div class="flex gap-2">
+                        <button onclick="changePage(-1)" class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs transition disabled:opacity-50" id="btnPrev">Prev</button>
+                        <button onclick="changePage(1)" class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs transition disabled:opacity-50" id="btnNext">Next</button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- BROADCAST TAB -->
-        <div id="tab-broadcast" class="tab-content space-y-6">
-            <div class="glass p-6 rounded-2xl max-w-3xl">
-                <h3 class="text-xl font-bold mb-6">Broadcast Pesan</h3>
+        <!-- TAB: BROADCAST -->
+        <div id="tab-broadcast" class="tab-content hidden space-y-6 max-w-3xl">
+            <div class="glass rounded-2xl p-6">
+                <h2 class="text-xl font-bold mb-6">Broadcast Message</h2>
                 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Target Penerima</label>
-                        <select id="broadcastTarget" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-green-500" onchange="toggleSpecificTargets()">
-                            <option value="all">Semua User</option>
-                            <option value="pro">User PRO Only</option>
-                            <option value="demo">User DEMO Only</option>
-                            <option value="specific">Pilih Manual</option>
-                        </select>
-                    </div>
-
-                    <div id="specificTargetsContainer" class="hidden">
-                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Pilih User</label>
-                        <div id="userCheckboxes" class="max-h-40 overflow-y-auto bg-slate-800 rounded-lg p-3 space-y-2 text-sm"></div>
+                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Filter Target</label>
+                        <div class="flex flex-wrap gap-2">
+                            <button onclick="setFilter('all')" id="f-all" class="filter-btn px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium transition">Semua User</button>
+                            <button onclick="setFilter('demo')" id="f-demo" class="filter-btn px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-medium transition">Demo Only</button>
+                            <button onclick="setFilter('pro')" id="f-pro" class="filter-btn px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-medium transition">Pro Only</button>
+                            <button onclick="setFilter('unlimited')" id="f-unlimited" class="filter-btn px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-medium transition">Unlimited Only</button>
+                        </div>
                     </div>
 
                     <div>
-                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Isi Pesan</label>
-                        <textarea id="broadcastMessage" rows="6" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-green-500 resize-none" placeholder="Ketik pesan broadcast di sini..."></textarea>
+                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Pesan</label>
+                        <textarea id="bcMessage" rows="4" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 text-sm focus:outline-none focus:border-emerald-500 resize-none" placeholder="Ketik pesan... Gunakan {nama} untuk nama toko"></textarea>
+                        <div class="flex justify-between mt-2 text-xs text-slate-500">
+                            <span>Gunakan {nama} untuk personalisasi</span>
+                            <span id="charCount">0 karakter</span>
+                        </div>
                     </div>
 
-                    <div class="flex items-center justify-between pt-4">
-                        <div class="text-xs text-slate-500">
-                            <span id="charCount">0</span> karakter | Estimasi waktu: <span id="estTime">0</span> detik
+                    <div class="flex items-center justify-between pt-4 border-t border-slate-800">
+                        <div class="text-xs text-slate-400">
+                            Estimasi: <span id="estTargets">0</span> user • <span id="estTime">0</span> detik
                         </div>
-                        <button onclick="sendBroadcast()" id="btnBroadcast" class="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2">
-                            <i data-lucide="send" class="w-4"></i> Kirim Broadcast
+                        <button onclick="sendBroadcast()" id="btnSend" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-semibold text-sm flex items-center gap-2 transition">
+                            <i data-lucide="send" class="w-4 h-4"></i>
+                            Kirim Broadcast
                         </button>
                     </div>
 
-                    <!-- Progress Bar -->
-                    <div id="broadcastProgress" class="hidden">
-                        <div class="w-full bg-slate-800 rounded-full h-2 mt-4">
-                            <div id="progressBar" class="bg-green-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    <!-- Progress -->
+                    <div id="bcProgress" class="hidden space-y-2 pt-4">
+                        <div class="flex justify-between text-sm">
+                            <span id="bcStatus">Mengirim...</span>
+                            <span id="bcPercent" class="text-emerald-400">0%</span>
                         </div>
-                        <p id="progressText" class="text-xs text-center mt-2 text-slate-400">Menyiapkan...</p>
+                        <div class="w-full bg-slate-800 rounded-full h-2">
+                            <div id="bcBar" class="bg-emerald-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- UPGRADE REQUESTS TAB -->
-        <div id="tab-upgrades" class="tab-content space-y-6">
-            <div class="flex justify-between items-center">
-                <h3 class="text-xl font-bold">Permintaan Upgrade</h3>
-                <button onclick="loadUpgradeRequests()" class="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg transition">
-                    <i data-lucide="refresh-cw" class="w-3 inline"></i> Refresh
-                </button>
-            </div>
-
-            <div class="glass rounded-2xl overflow-hidden">
-                <table class="w-full text-left border-collapse">
-                    <thead class="bg-slate-800/50 text-[10px] uppercase text-slate-500 font-bold">
-                        <tr>
-                            <th class="p-4">User</th>
-                            <th class="p-4">Tanggal Request</th>
-                            <th class="p-4">Alasan</th>
-                            <th class="p-4 text-right">Aksi</th>
-                        </tr>
-                    </thead>
-                    <tbody id="upgradeTable" class="text-sm">
-                        <tr>
-                            <td colspan="4" class="p-8 text-center text-slate-500">Memuat data...</td>
-                        </tr>
-                    </tbody>
-                </table>
+        <!-- TAB: TERMINAL -->
+        <div id="tab-terminal" class="tab-content hidden h-[calc(100vh-180px)]">
+            <div class="glass rounded-2xl h-full flex flex-col overflow-hidden">
+                <div class="flex items-center justify-between p-3 border-b border-slate-800 bg-slate-900/50">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+                        <span class="text-sm font-medium">System Logs</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">LIVE</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="clearTerminal()" class="text-xs px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 transition">Clear</button>
+                        <button onclick="toggleAutoScroll()" id="btnAutoScroll" class="text-xs px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 transition">Auto-scroll: ON</button>
+                    </div>
+                </div>
+                
+                <div id="terminalContent" class="terminal flex-1 p-4 overflow-y-auto text-xs space-y-1">
+                    <div class="text-slate-600 italic">Menunggu logs...</div>
+                </div>
             </div>
         </div>
 
     </main>
 
-    <!-- Edit User Modal -->
-    <div id="editModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="glass rounded-2xl p-6 w-full max-w-md">
-            <h3 class="text-xl font-bold mb-4">Edit User</h3>
-            <input type="hidden" id="editUserId">
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Nama Toko</label>
-                    <input type="text" id="editStoreName" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm">
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Status Paket</label>
-                    <select id="editStatus" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm">
-                        <option value="demo">DEMO</option>
-                        <option value="pro">PRO</option>
-                    </select>
-                </div>
-            </div>
-            <div class="flex gap-2 mt-6">
-                <button onclick="closeEditModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg text-sm transition">Batal</button>
-                <button onclick="saveUserEdit()" class="flex-1 bg-green-600 hover:bg-green-500 py-2 rounded-lg text-sm font-bold transition">Simpan</button>
-            </div>
-        </div>
-    </div>
-
     <script>
-        // Global State
         const socket = io();
-        let currentData = { users: [], stats: {} };
-        let isMaintenance = false;
-        let allUsers = [];
+        let currentTab = 'overview';
+        let currentPage = 1;
+        let autoScroll = true;
+        let broadcastFilter = 'all';
+        let statsData = { users: { total: 0 } };
 
-        // Initialize
+        // Init
         document.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
-            initChart();
-            loadData();
-            setupEventListeners();
+            loadHealth();
+            loadUsers();
+            setInterval(loadHealth, 5000); // Refresh health setiap 5s
         });
 
-        // Chart Setup
-        function initChart() {
-            const ctx = document.getElementById('trafficChart').getContext('2d');
-            window.trafficChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'],
-                    datasets: [{
-                        label: 'Aktivitas',
-                        data: [0, 0, 0, 0, 0, 0, 0],
-                        borderColor: '#10b981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        fill: true,
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { display: false },
-                        x: { grid: { display: false, color: '#1e293b' }, ticks: { color: '#64748b' } }
-                    }
-                }
-            });
-        }
-
-        // Tab Switching
-        function switchTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('tab-active'));
-            document.querySelectorAll('.nav-btn').forEach(b => {
-                b.classList.remove('bg-slate-800', 'text-white');
-                b.classList.add('text-slate-400');
-            });
-            
-            document.getElementById('tab-' + tab).classList.add('tab-active');
-            const btn = document.getElementById('btn-' + tab);
-            btn.classList.add('bg-slate-800', 'text-white');
-            btn.classList.remove('text-slate-400');
-            
-            document.getElementById('tabTitle').innerText = tab.charAt(0).toUpperCase() + tab.slice(1).replace('-', ' ');
-            
-            if (tab === 'users') renderUserTable();
-            if (tab === 'upgrades') loadUpgradeRequests();
-            if (tab === 'broadcast') loadUserCheckboxes();
-            
-            lucide.createIcons();
-        }
-
-        // Data Loading
-        async function loadData() {
-            try {
-                const res = await fetch('/api/admin/data');
-                if (!res.ok) throw new Error('Failed to fetch');
-                const data = await res.json();
-                
-                currentData = data;
-                allUsers = data.users || [];
-                
-                // Update stats
-                document.getElementById('stat-total').innerText = data.stats.total;
-                document.getElementById('stat-pro').innerText = data.stats.pro;
-                document.getElementById('stat-demo').innerText = data.stats.demo;
-                document.getElementById('stat-pending').innerText = data.stats.pendingRequests || 0;
-                
-                // Update maintenance state
-                isMaintenance = data.stats.maintenance;
-                updateMaintenanceUI();
-                
-                // Update badge
-                if (data.stats.pendingRequests > 0) {
-                    document.getElementById('upgradeBadge').classList.remove('hidden');
-                }
-                
-            } catch (err) {
-                showToast('Error loading data: ' + err.message, 'error');
-            }
-        }
-
-        // Real-time Socket Events
+        // Socket Events
         socket.on('bot_update', (data) => {
-            const statusText = document.getElementById('statusText');
-            const indicator = statusText.parentElement.querySelector('span');
-            
-            statusText.innerText = data.status;
-            
-            if (data.ready) {
-                indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
-                document.getElementById('qrContainer').classList.add('hidden');
-            } else if (data.qr) {
-                indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
-                document.getElementById('qrContainer').classList.remove('hidden');
-                document.getElementById('qrArea').innerHTML = `<img src="${data.qr}" class="w-full h-full" />`;
-            } else {
-                indicator.className = "w-2 h-2 rounded-full bg-red-500";
-            }
+            updateWAStatus(data);
         });
 
-        socket.on('new_log', (data) => {
-            addLogEntry(data);
+        socket.on('system_log', (log) => {
+            addTerminalLine(log);
         });
 
-        socket.on('maintenance_update', (data) => {
-            isMaintenance = data.enabled;
-            updateMaintenanceUI();
-            showToast(`Maintenance mode ${data.enabled ? 'enabled' : 'disabled'}`, 'info');
+        socket.on('logs_history', (logs) => {
+            const term = document.getElementById('terminalContent');
+            term.innerHTML = '';
+            logs.reverse().forEach(log => addTerminalLine(log, false));
         });
 
         socket.on('broadcast_progress', (data) => {
-            const percent = (data.current / data.total) * 100;
-            document.getElementById('progressBar').style.width = percent + '%';
-            document.getElementById('progressText').innerText = `Mengirim ${data.current}/${data.total} (${data.success} sukses, ${data.failed} gagal)`;
+            updateBroadcastProgress(data);
         });
 
         socket.on('broadcast_complete', (data) => {
-            document.getElementById('btnBroadcast').disabled = false;
-            document.getElementById('btnBroadcast').innerHTML = '<i data-lucide="send" class="w-4"></i> Kirim Broadcast';
-            lucide.createIcons();
-            showToast(`Broadcast selesai! ${data.success} sukses, ${data.failed} gagal`, 'success');
-            setTimeout(() => {
-                document.getElementById('broadcastProgress').classList.add('hidden');
-            }, 3000);
+            completeBroadcast(data);
         });
 
-        // User Table
-        function renderUserTable(filter = '') {
-            const tbody = document.getElementById('userTable');
-            const filtered = allUsers.filter(u => 
-                u.store_name?.toLowerCase().includes(filter.toLowerCase()) || 
-                u.id?.includes(filter)
-            );
+        socket.on('user_updated', (data) => {
+            showToast(`User ${data.id.substring(0,10)}... updated to ${data.status}`, 'success');
+            loadUsers();
+        });
+
+        // Navigation
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.nav-item').forEach(el => {
+                el.classList.remove('bg-emerald-600/20', 'text-emerald-400', 'border', 'border-emerald-500/30');
+                el.classList.add('text-slate-400');
+            });
             
-            tbody.innerHTML = filtered.map(u => `
-                <tr class="border-t border-slate-800/40 hover:bg-slate-800/20 transition">
-                    <td class="p-4 font-bold">${u.store_name || 'Unknown'}</td>
-                    <td class="p-4 text-slate-400 font-mono text-xs">${u.id?.split('@')[0] || '-'}</td>
-                    <td class="p-4">
-                        <button onclick="toggleUserPackage('${u.id}', '${u.status}')" 
-                            class="px-3 py-1 rounded-full text-[10px] font-bold uppercase transition ${u.status === 'pro' ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}">
-                            ${u.status}
-                        </button>
-                    </td>
-                    <td class="p-4 text-slate-400 text-xs">${new Date(u.created_at).toLocaleDateString('id-ID')}</td>
-                    <td class="p-4 text-right">
-                        <button onclick="openEditModal('${u.id}', '${u.store_name}', '${u.status}')" class="text-blue-400 hover:text-blue-300 text-xs mr-3">Edit</button>
-                        <button onclick="deleteUser('${u.id}')" class="text-red-400 hover:text-red-300 text-xs">Hapus</button>
-                    </td>
-                </tr>
-            `).join('');
+            document.getElementById(`tab-${tab}`).classList.remove('hidden');
+            const nav = document.getElementById(`nav-${tab}`);
+            nav.classList.remove('text-slate-400');
+            nav.classList.add('bg-emerald-600/20', 'text-emerald-400', 'border', 'border-emerald-500/30');
+            
+            currentTab = tab;
+            
+            if (tab === 'terminal') {
+                document.getElementById('logBadge').classList.add('hidden');
+            }
+            
+            lucide.createIcons();
         }
 
-        function filterUsers() {
-            const search = document.getElementById('searchUser').value;
-            renderUserTable(search);
-        }
-
-        // Toggle Package
-        async function toggleUserPackage(userId, currentStatus) {
-            if (!confirm(`Ubah status ke ${currentStatus === 'pro' ? 'DEMO' : 'PRO'}?`)) return;
-            
+        // Health Monitor
+        async function loadHealth() {
             try {
-                const res = await fetch(`/api/admin/user/${userId}/toggle-package`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                
+                const res = await fetch('/health');
                 const data = await res.json();
-                if (data.success) {
-                    showToast(`Status diubah ke ${data.newStatus}`, 'success');
-                    loadData();
-                    renderUserTable(document.getElementById('searchUser').value);
-                } else {
-                    throw new Error(data.error);
-                }
-            } catch (err) {
-                showToast('Error: ' + err.message, 'error');
-            }
-        }
-
-        // Edit User Modal
-        function openEditModal(id, name, status) {
-            document.getElementById('editUserId').value = id;
-            document.getElementById('editStoreName').value = name || '';
-            document.getElementById('editStatus').value = status || 'demo';
-            document.getElementById('editModal').classList.remove('hidden');
-        }
-
-        function closeEditModal() {
-            document.getElementById('editModal').classList.add('hidden');
-        }
-
-        async function saveUserEdit() {
-            const id = document.getElementById('editUserId').value;
-            const store_name = document.getElementById('editStoreName').value;
-            const status = document.getElementById('editStatus').value;
-            
-            try {
-                const res = await fetch(`/api/admin/user/${id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ store_name, status })
-                });
                 
-                if (res.ok) {
-                    showToast('User updated', 'success');
-                    closeEditModal();
-                    loadData();
-                    renderUserTable();
-                } else {
-                    throw new Error('Failed to update');
-                }
+                document.getElementById('healthStatus').innerText = data.status === 'healthy' ? 'Healthy' : 'Degraded';
+                document.getElementById('healthStatus').className = `text-xl font-bold ${data.status === 'healthy' ? 'text-emerald-400' : 'text-yellow-400'}`;
+                
+                document.getElementById('memText').innerText = `${data.system.memory.used}MB / ${data.system.memory.total}MB`;
+                document.getElementById('memPercent').innerText = `${data.system.memory.percentage}%`;
+                document.getElementById('memBar').style.width = `${data.system.memory.percentage}%`;
+                
+                const hours = Math.floor(data.uptime / 3600);
+                const mins = Math.floor((data.uptime % 3600) / 60);
+                const secs = data.uptime % 60;
+                document.getElementById('uptimeText').innerText = 
+                    `${hours.toString().padStart(2,'0')}:${mins.toString().padStart(2,'0')}:${secs.toString().padStart(2,'0')}`;
+                
+                statsData = data;
+                document.getElementById('statTotal').innerText = '...'; // Will be updated by user load
+                
             } catch (err) {
-                showToast('Error: ' + err.message, 'error');
+                console.error('Health check failed:', err);
             }
         }
 
-        async function deleteUser(id) {
-            if (!confirm('Hapus user ini? Tindakan tidak bisa dibatalkan.')) return;
+        // WA Status UI
+        function updateWAStatus(data) {
+            const dot = document.getElementById('waDot');
+            const text = document.getElementById('waText');
+            const mini = document.getElementById('waStatusMini');
+            
+            if (data.ready) {
+                dot.className = 'w-2 h-2 rounded-full bg-emerald-500 status-dot';
+                text.innerText = 'Online';
+                text.className = 'text-xs font-medium text-emerald-400';
+                mini.innerText = 'Connected';
+                mini.className = 'text-lg font-bold text-emerald-400';
+                
+                document.getElementById('qrContainer').classList.add('hidden');
+                document.getElementById('connectedState').classList.remove('hidden');
+                document.getElementById('disconnectedState').classList.add('hidden');
+            } else if (data.qr) {
+                dot.className = 'w-2 h-2 rounded-full bg-yellow-500 status-dot';
+                text.innerText = 'Scan QR';
+                text.className = 'text-xs font-medium text-yellow-400';
+                mini.innerText = 'Scan Required';
+                mini.className = 'text-lg font-bold text-yellow-400';
+                
+                document.getElementById('qrContainer').classList.remove('hidden');
+                document.getElementById('connectedState').classList.add('hidden');
+                document.getElementById('disconnectedState').classList.add('hidden');
+                document.getElementById('qrImage').innerHTML = `<img src="${data.qr}" class="w-full h-full">`;
+            } else {
+                dot.className = 'w-2 h-2 rounded-full bg-red-500 status-dot';
+                text.innerText = 'Disconnected';
+                text.className = 'text-xs font-medium text-red-400';
+                mini.innerText = 'Disconnected';
+                mini.className = 'text-lg font-bold text-red-400';
+                
+                document.getElementById('qrContainer').classList.add('hidden');
+                document.getElementById('connectedState').classList.add('hidden');
+                document.getElementById('disconnectedState').classList.remove('hidden');
+            }
+        }
+
+        function reconnectWA() {
+            socket.emit('request_reconnect');
+            showToast('Reconnecting...', 'info');
+        }
+
+        // User Database dengan Toggle Switch
+        async function loadUsers() {
+            const search = document.getElementById('searchInput').value;
+            const status = document.getElementById('filterStatus').value;
             
             try {
-                const res = await fetch(`/api/admin/user/${id}`, { method: 'DELETE' });
-                if (res.ok) {
-                    showToast('User dihapus', 'success');
-                    loadData();
-                    renderUserTable();
-                }
-            } catch (err) {
-                showToast('Error: ' + err.message, 'error');
-            }
-        }
-
-        // Upgrade Requests
-        async function loadUpgradeRequests() {
-            try {
-                const res = await fetch('/api/admin/upgrade-requests');
+                const res = await fetch(`/api/admin/users?page=${currentPage}&search=${search}&status=${status}`);
                 const data = await res.json();
-                const tbody = document.getElementById('upgradeTable');
                 
-                if (data.requests.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-500">Tidak ada permintaan pending</td></tr>';
-                    return;
-                }
-                
-                tbody.innerHTML = data.requests.map(r => `
-                    <tr class="border-t border-slate-800/40">
+                const tbody = document.getElementById('userTable');
+                tbody.innerHTML = data.users.map(u => `
+                    <tr class="hover:bg-slate-800/30 transition">
                         <td class="p-4">
-                            <div class="font-bold">${r.users?.store_name || 'Unknown'}</div>
-                            <div class="text-xs text-slate-500">${r.user_id?.split('@')[0]}</div>
+                            <div class="font-medium text-white">${u.store_name}</div>
+                            <div class="text-xs text-slate-500">${new Date(u.created_at).toLocaleDateString('id-ID')}</div>
                         </td>
-                        <td class="p-4 text-xs text-slate-400">${new Date(r.created_at).toLocaleDateString('id-ID')}</td>
-                        <td class="p-4 text-xs">${r.reason || '-'}</td>
-                        <td class="p-4 text-right space-x-2">
-                            <button onclick="processUpgrade('${r.id}', 'approve')" class="bg-green-600/20 text-green-400 hover:bg-green-600/30 px-3 py-1 rounded text-xs transition">Approve</button>
-                            <button onclick="processUpgrade('${r.id}', 'reject')" class="bg-red-600/20 text-red-400 hover:bg-red-600/30 px-3 py-1 rounded text-xs transition">Reject</button>
+                        <td class="p-4 text-slate-400 font-mono text-xs">${u.id.split('@')[0]}</td>
+                        <td class="p-4">
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(u.status)}">
+                                ${u.status.toUpperCase()}
+                            </span>
+                        </td>
+                        <td class="p-4">
+                            <div class="flex items-center gap-3">
+                                <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                                    <input type="checkbox" 
+                                        ${u.status !== 'demo' ? 'checked' : ''}
+                                        onchange="quickToggle('${u.id}', this.checked)"
+                                        class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-all duration-300 ${u.status === 'unlimited' ? 'border-purple-500 right-0' : u.status === 'pro' ? 'border-emerald-500 right-0' : 'border-slate-500 left-0'}"/>
+                                    <label class="toggle-label block overflow-hidden h-5 rounded-full bg-slate-700 cursor-pointer transition-colors duration-300 ${u.status !== 'demo' ? (u.status === 'unlimited' ? 'bg-purple-500' : 'bg-emerald-500') : ''}"></label>
+                                </div>
+                                <select onchange="setUserStatus('${u.id}', this.value)" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-emerald-500">
+                                    <option value="demo" ${u.status === 'demo' ? 'selected' : ''}>Demo</option>
+                                    <option value="pro" ${u.status === 'pro' ? 'selected' : ''}>Pro</option>
+                                    <option value="unlimited" ${u.status === 'unlimited' ? 'selected' : ''}>Unlimited</option>
+                        </select>
+                            </div>
                         </td>
                     </tr>
                 `).join('');
+                
+                document.getElementById('statTotal').innerText = data.pagination.total;
+                document.getElementById('paginationInfo').innerText = 
+                    `Page ${data.pagination.page} of ${data.pagination.totalPages} (${data.pagination.total} users)`;
+                
+                document.getElementById('btnPrev').disabled = data.pagination.page === 1;
+                document.getElementById('btnNext').disabled = data.pagination.page >= data.pagination.totalPages;
+                
+                lucide.createIcons();
+                
             } catch (err) {
-                showToast('Error loading requests', 'error');
+                showToast('Gagal memuat users', 'error');
             }
         }
 
-        async function processUpgrade(requestId, action) {
-            const reason = action === 'reject' ? prompt('Alasan penolakan:') : null;
-            
+        function getStatusColor(status) {
+            if (status === 'unlimited') return 'bg-purple-500/20 text-purple-400 border border-purple-500/30';
+            if (status === 'pro') return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+            return 'bg-slate-700 text-slate-400 border border-slate-600';
+        }
+
+        async function quickToggle(id, isChecked) {
+            // Quick toggle: unchecked=demo, checked=pro
+            const newStatus = isChecked ? 'pro' : 'demo';
+            await setUserStatus(id, newStatus);
+        }
+
+        async function setUserStatus(id, status) {
             try {
-                const res = await fetch(`/api/admin/upgrade-requests/${requestId}/${action}`, {
+                const res = await fetch(`/api/admin/user/${id}/status`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ reason })
+                    body: JSON.stringify({ status })
                 });
                 
                 if (res.ok) {
-                    showToast(`Upgrade ${action === 'approve' ? 'disetujui' : 'ditolak'}`, 'success');
-                    loadUpgradeRequests();
-                    loadData(); // Refresh stats
+                    showToast(`Status updated to ${status}`, 'success');
+                    loadUsers();
+                } else {
+                    throw new Error('Failed');
                 }
             } catch (err) {
-                showToast('Error processing request', 'error');
+                showToast('Error updating status', 'error');
+                loadUsers(); // Reset UI
             }
+        }
+
+        function changePage(delta) {
+            currentPage += delta;
+            if (currentPage < 1) currentPage = 1;
+            loadUsers();
         }
 
         // Broadcast
-        function loadUserCheckboxes() {
-            const container = document.getElementById('userCheckboxes');
-            container.innerHTML = allUsers.map(u => `
-                <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-700/50 p-1 rounded">
-                    <input type="checkbox" value="${u.id}" class="user-checkbox rounded border-slate-600 bg-slate-700 text-green-500 focus:ring-green-500">
-                    <span class="truncate">${u.store_name || u.id}</span>
-                    <span class="text-xs ${u.status === 'pro' ? 'text-green-400' : 'text-slate-500'} ml-auto">${u.status}</span>
-                </label>
-            `).join('');
+        function setFilter(filter) {
+            broadcastFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('bg-emerald-600', 'text-white');
+                btn.classList.add('bg-slate-800', 'text-slate-300');
+            });
+            document.getElementById(`f-${filter}`).classList.remove('bg-slate-800', 'text-slate-300');
+            document.getElementById(`f-${filter}`).classList.add('bg-emerald-600', 'text-white');
         }
 
-        function toggleSpecificTargets() {
-            const target = document.getElementById('broadcastTarget').value;
-            document.getElementById('specificTargetsContainer').classList.toggle('hidden', target !== 'specific');
-        }
+        document.getElementById('bcMessage')?.addEventListener('input', (e) => {
+            document.getElementById('charCount').innerText = e.target.value.length + ' karakter';
+        });
 
         async function sendBroadcast() {
-            const message = document.getElementById('broadcastMessage').value;
-            const target = document.getElementById('broadcastTarget').value;
+            const msg = document.getElementById('bcMessage').value;
+            if (!msg.trim()) return showToast('Pesan tidak boleh kosong', 'error');
             
-            if (!message.trim()) {
-                showToast('Pesan tidak boleh kosong', 'error');
-                return;
-            }
-            
-            let userIds = [];
-            if (target === 'specific') {
-                userIds = Array.from(document.querySelectorAll('.user-checkbox:checked')).map(cb => cb.value);
-                if (userIds.length === 0) {
-                    showToast('Pilih minimal 1 user', 'error');
-                    return;
-                }
-            }
-            
-            document.getElementById('broadcastProgress').classList.remove('hidden');
-            document.getElementById('btnBroadcast').disabled = true;
-            document.getElementById('btnBroadcast').innerHTML = 'Mengirim...';
+            document.getElementById('btnSend').disabled = true;
+            document.getElementById('bcProgress').classList.remove('hidden');
             
             try {
                 const res = await fetch('/api/admin/broadcast', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, target, userIds })
+                    body: JSON.stringify({ message: msg, target: broadcastFilter })
                 });
                 
                 const data = await res.json();
-                if (!res.ok) throw new Error(data.error);
-                
-                showToast(data.message, 'success');
-                document.getElementById('broadcastMessage').value = '';
+                if (data.success) {
+                    showToast('Broadcast dimulai...', 'success');
+                    monitorBroadcast(data.jobId);
+                } else {
+                    throw new Error(data.error);
+                }
             } catch (err) {
                 showToast('Error: ' + err.message, 'error');
-                document.getElementById('broadcastProgress').classList.add('hidden');
-                document.getElementById('btnBroadcast').disabled = false;
-                document.getElementById('btnBroadcast').innerHTML = '<i data-lucide="send" class="w-4"></i> Kirim Broadcast';
-                lucide.createIcons();
+                document.getElementById('btnSend').disabled = false;
+                document.getElementById('bcProgress').classList.add('hidden');
             }
         }
 
-        // Maintenance Toggle
-        function updateMaintenanceUI() {
-            const btn = document.getElementById('maintBtn');
-            const banner = document.getElementById('maintBanner');
+        function monitorBroadcast(jobId) {
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/admin/broadcast/${jobId}`);
+                    const data = await res.json();
+                    
+                    const pct = Math.round((data.sent / data.total) * 100);
+                    document.getElementById('bcBar').style.width = pct + '%';
+                    document.getElementById('bcPercent').innerText = pct + '%';
+                    document.getElementById('bcStatus').innerText = 
+                        `Mengirim: ${data.sent}/${data.total} (Gagal: ${data.failed})`;
+                    
+                    if (data.status === 'completed') {
+                        clearInterval(interval);
+                        completeBroadcast(data);
+                    }
+                } catch (e) {}
+            }, 1000);
+        }
+
+        function completeBroadcast(data) {
+            document.getElementById('bcBar').style.width = '100%';
+            document.getElementById('bcStatus').innerText = `Selesai! ${data.sent} terkirim, ${data.failed} gagal`;
+            document.getElementById('btnSend').disabled = false;
+            showToast(`Broadcast selesai! ${data.sent} pesan terkirim`, 'success');
+        }
+
+        // Terminal
+        function addTerminalLine(log, animate = true) {
+            const term = document.getElementById('terminalContent');
+            const line = document.createElement('div');
+            line.className = `terminal-line py-1 ${animate ? '' : ''}`;
             
-            if (isMaintenance) {
-                btn.innerHTML = 'Maintenance: ON';
-                btn.classList.add('bg-yellow-600', 'text-white');
-                btn.classList.remove('bg-slate-800');
-                banner.classList.remove('hidden');
-            } else {
-                btn.innerHTML = 'Maintenance: OFF';
-                btn.classList.remove('bg-yellow-600', 'text-white');
-                btn.classList.add('bg-slate-800');
-                banner.classList.add('hidden');
+            const time = new Date(log.timestamp).toLocaleTimeString();
+            const colors = {
+                error: 'text-red-400',
+                warn: 'text-yellow-400',
+                info: 'text-emerald-400'
+            };
+            
+            line.innerHTML = `
+                <span class="text-slate-600">[${time}]</span>
+                <span class="${colors[log.level] || 'text-slate-300'} font-semibold">[${log.level.toUpperCase()}]</span>
+                <span class="text-slate-300">${log.message}</span>
+                ${log.memory ? `<span class="text-slate-600 ml-2">(${log.memory})</span>` : ''}
+            `;
+            
+            term.appendChild(line);
+            if (term.children.length > 500) term.removeChild(term.firstChild);
+            
+            if (autoScroll) term.scrollTop = term.scrollHeight;
+            
+            if (currentTab !== 'terminal') {
+                document.getElementById('logBadge').classList.remove('hidden');
             }
         }
 
+        function clearTerminal() {
+            document.getElementById('terminalContent').innerHTML = '<div class="text-slate-600 italic">Terminal cleared...</div>';
+        }
+
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            document.getElementById('btnAutoScroll').innerText = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+        }
+
+        // Maintenance
+        let maintMode = false;
         async function toggleMaintenance() {
-            const action = isMaintenance ? 'matikan' : 'aktifkan';
-            if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} mode maintenance?`)) return;
-            
+            maintMode = !maintMode;
             try {
-                const res = await fetch('/api/admin/toggle-maintenance', {
+                const res = await fetch('/api/admin/maintenance', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled: !isMaintenance })
+                    body: JSON.stringify({ enabled: maintMode })
                 });
                 
                 if (res.ok) {
-                    showToast(`Maintenance ${action}kan`, 'success');
+                    showToast(maintMode ? 'Maintenance mode ON' : 'Maintenance mode OFF', 'info');
+                    document.getElementById('maintText').innerText = maintMode ? 'Maintenance aktif' : 'Mode normal aktif';
                 }
             } catch (err) {
-                showToast('Error toggling maintenance', 'error');
+                showToast('Error toggle maintenance', 'error');
             }
         }
 
         // Utilities
-        function addLogEntry(data) {
-            const area = document.getElementById('logArea');
-            const item = document.createElement('div');
-            item.className = 'border-l-2 border-slate-700 pl-2 animate-pulse';
-            
-            let content = '';
-            if (data.type === 'error') {
-                content = `<span class="text-red-400">[ERROR]</span> <span class="text-slate-300">${data.error}</span>`;
-                item.classList.add('border-red-500');
-            } else {
-                content = `<span class="text-slate-600">${new Date(data.timestamp).toLocaleTimeString()}</span> <span class="text-green-500">MSG:</span> <span class="text-white truncate">${data.body}</span>`;
-                item.classList.add('border-green-500');
-            }
-            
-            item.innerHTML = content;
-            area.insertBefore(item, area.firstChild);
-            
-            // Keep only last 50 logs
-            while (area.children.length > 50) {
-                area.removeChild(area.lastChild);
-            }
-            
-            setTimeout(() => item.classList.remove('animate-pulse'), 1000);
-        }
-
-        function clearLogs() {
-            document.getElementById('logArea').innerHTML = '<div class="text-slate-600">[SYSTEM] Logs cleared...</div>';
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
         }
 
         function showToast(message, type = 'info') {
@@ -695,23 +733,23 @@
             const toast = document.createElement('div');
             
             const colors = {
-                success: 'border-green-500 bg-green-500/10 text-green-400',
-                error: 'border-red-500 bg-red-500/10 text-red-400',
-                info: 'border-blue-500 bg-blue-500/10 text-blue-400'
+                success: 'bg-emerald-600 border-emerald-500',
+                error: 'bg-red-600 border-red-500',
+                info: 'bg-blue-600 border-blue-500'
             };
             
-            toast.className = `toast glass px-4 py-3 rounded-lg border-l-4 ${colors[type]} flex items-center gap-3 min-w-[300px] shadow-2xl`;
+            toast.className = `${colors[type]} border px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 pointer-events-auto transform transition-all duration-300 translate-x-full`;
             toast.innerHTML = `
-                <i data-lucide="${type === 'success' ? 'check-circle' : type === 'error' ? 'alert-circle' : 'info'}" class="w-5"></i>
-                <span class="text-sm font-medium">${message}</span>
+                <i data-lucide="${type === 'success' ? 'check' : type === 'error' ? 'alert-circle' : 'info'}" class="w-5 h-5"></i>
+                <span class="font-medium text-sm text-white">${message}</span>
             `;
             
             container.appendChild(toast);
             lucide.createIcons();
             
+            setTimeout(() => toast.classList.remove('translate-x-full'), 100);
             setTimeout(() => {
-                toast.style.opacity = '0';
-                toast.style.transform = 'translateX(100%)';
+                toast.classList.add('translate-x-full', 'opacity-0');
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
         }
@@ -720,20 +758,6 @@
             await fetch('/admin/logout', { method: 'POST' });
             window.location.href = '/admin-login.html';
         }
-
-        function setupEventListeners() {
-            // Character count for broadcast
-            document.getElementById('broadcastMessage')?.addEventListener('input', function(e) {
-                document.getElementById('charCount').innerText = e.target.value.length;
-                const targets = document.getElementById('broadcastTarget').value === 'specific' 
-                    ? document.querySelectorAll('.user-checkbox:checked').length 
-                    : allUsers.length;
-                document.getElementById('estTime').innerText = targets * 1.5;
-            });
-        }
-
-        // Refresh data every 30 seconds
-        setInterval(loadData, 30000);
     </script>
 </body>
 </html>
