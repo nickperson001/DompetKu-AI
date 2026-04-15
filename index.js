@@ -118,7 +118,9 @@ let botStatus = 'Memulai...';
 let currentQR = '';
 
 const client = new Client({
-    authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth({
+        dataPath: './.wwebjs_auth' // Folder ini akan tersimpan permanen di Volume
+    }),
     puppeteer: {
         headless: true,
         args: [
