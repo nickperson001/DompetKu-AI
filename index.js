@@ -15,7 +15,7 @@ const supabase = require('./src/config/supabase');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const port = process.env.PORT || 3000;
+const port = process.env.PORT;
 
 // 1. SETUP SESSION (Penting untuk Login)
 app.use(session({
@@ -118,6 +118,6 @@ client.on('message', async (msg) => {
 
 client.initialize();
 
-server.listen(port, () => {
+server.listen(port, '0.0.0.0', () => {
     console.log(`🚀 DompetKu siap di http://localhost:${port}`);
 });
