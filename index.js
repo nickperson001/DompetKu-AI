@@ -85,11 +85,17 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        // Menggunakan Chrome di Railway (Linux) atau Chrome di Windows
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--single-process'
+        ],
+        // Jika jalan di Railway, biarkan undefined agar Puppeteer mencari Chromium bawaannya otomatis.
+        // Jika di lokal, tetap gunakan Brave.
         executablePath: process.env.RAILWAY_ENVIRONMENT 
-            ? '/usr/bin/google-chrome' 
-            : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' 
+            ? undefined 
+            : 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'
     }
 });
 
@@ -113,5 +119,5 @@ client.on('message', async (msg) => {
 client.initialize();
 
 server.listen(port, () => {
-    console.log(`🚀 HQ KawanCuan siap di http://localhost:${port}`);
+    console.log(`🚀 DompetKu siap di http://localhost:${port}`);
 });
