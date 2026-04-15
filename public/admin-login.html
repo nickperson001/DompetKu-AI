@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Admin - KawanCuan HQ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-md glass p-8 rounded-3xl shadow-2xl">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">KawanCuan</h1>
+            <p class="text-slate-400 mt-2">Selamat datang kembali, Admin.</p>
+        </div>
+
+        <form id="loginForm" class="space-y-5">
+            <div>
+                <label class="block text-sm font-medium mb-2 text-slate-300">Username</label>
+                <input type="text" id="username" required 
+                    class="w-full bg-slate-800/50 border border-slate-700 p-3 rounded-xl focus:ring-2 focus:ring-green-500 outline-none transition">
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2 text-slate-300">Password</label>
+                <input type="password" id="password" required 
+                    class="w-full bg-slate-800/50 border border-slate-700 p-3 rounded-xl focus:ring-2 focus:ring-green-500 outline-none transition">
+            </div>
+            
+            <div id="errorMsg" class="hidden text-red-400 text-sm text-center animate-pulse italic">
+                Username atau password salah!
+            </div>
+
+            <button type="submit" id="loginBtn" 
+                class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-green-900/20">
+                Masuk ke HQ
+            </button>
+        </form>
+        
+        <p class="text-center text-xs text-slate-500 mt-8">© 2026 KawanCuan System. All rights reserved.</p>
+    </div>
+
+    <script>
+        document.getElementById('loginForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            const btn = document.getElementById('loginBtn');
+            const err = document.getElementById('errorMsg');
+            
+            btn.textContent = 'Memvalidasi...';
+            btn.disabled = true;
+            err.classList.add('hidden');
+
+            try {
+                const res = await fetch('/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    window.location.href = '/index.html';
+                } else {
+                    err.classList.remove('hidden');
+                }
+            } catch (error) {
+                alert("Koneksi server gagal.");
+            } finally {
+                btn.textContent = 'Masuk ke HQ';
+                btn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>
