@@ -85,8 +85,11 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        executablePath: 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe', // Jalur Brave Mas
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        // Menggunakan Chrome di Railway (Linux) atau Chrome di Windows
+        executablePath: process.env.RAILWAY_ENVIRONMENT 
+            ? '/usr/bin/google-chrome' 
+            : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' 
     }
 });
 
