@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - DompetKu HQ</title>
+    <title>Dashboard - DompetKu</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -16,25 +16,37 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         #logArea::-webkit-scrollbar { width: 4px; }
         #logArea::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        .toast { animation: slideIn 0.3s ease; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .loading { position: relative; pointer-events: none; }
+        .loading::after { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="flex flex-col md:flex-row min-h-screen">
 
-    <aside id="sidebar" class="hidden md:flex flex-col w-64 glass p-6 fixed h-full z-40 transition-all">
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+    <!-- Sidebar -->
+    <aside class="hidden md:flex flex-col w-64 glass p-6 fixed h-full z-40">
         <div class="mb-10">
             <h1 class="text-2xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">DompetKu</h1>
-            <p class="text-[10px] tracking-widest text-slate-500 uppercase font-bold">Admin HQ</p>
+            <p class="text-[10px] tracking-widest text-slate-500 uppercase font-bold">Admin</p>
         </div>
         
         <nav class="space-y-3 flex-1">
-            <button onclick="switchTab('overview')" id="btn-overview" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl bg-slate-800 text-white">
+            <button onclick="switchTab('overview')" id="btn-overview" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl bg-slate-800 text-white transition-all">
                 <i data-lucide="layout-dashboard" class="w-5"></i> Overview
             </button>
-            <button onclick="switchTab('users')" id="btn-users" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition">
+            <button onclick="switchTab('users')" id="btn-users" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition-all">
                 <i data-lucide="database" class="w-5"></i> Database
             </button>
-            <button onclick="switchTab('broadcast')" id="btn-broadcast" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition">
+            <button onclick="switchTab('broadcast')" id="btn-broadcast" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition-all">
                 <i data-lucide="megaphone" class="w-5"></i> Broadcast
+            </button>
+            <button onclick="switchTab('upgrades')" id="btn-upgrades" class="nav-btn w-full flex items-center gap-3 p-3 rounded-xl text-slate-400 hover:bg-slate-800 transition-all relative">
+                <i data-lucide="trending-up" class="w-5"></i> Upgrade Requests
+                <span id="upgradeBadge" class="hidden absolute right-2 top-2 w-2 h-2 bg-red-500 rounded-full"></span>
             </button>
         </nav>
 
@@ -43,216 +55,685 @@
         </button>
     </aside>
 
+    <!-- Mobile Header -->
+    <div class="md:hidden glass p-4 flex justify-between items-center sticky top-0 z-30">
+        <h1 class="text-xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">DompetKu HQ</h1>
+        <button onclick="document.querySelector('aside').classList.toggle('hidden'); document.querySelector('aside').classList.toggle('fixed'); document.querySelector('aside').classList.toggle('inset-0');" class="p-2">
+            <i data-lucide="menu" class="w-6"></i>
+        </button>
+    </div>
+
     <main class="flex-1 md:ml-64 p-6 md:p-10 space-y-8">
 
-        <div class="glass p-4 rounded-2xl flex items-center justify-between border-l-4 border-yellow-500">
-    <div class="flex items-center gap-3">
-        <i data-lucide="wrench" class="text-yellow-500 w-5"></i>
-        <div>
-            <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Mode Perbaikan</p>
-            <p id="maintStatusLabel" class="text-[10px] text-slate-500">Sistem berjalan normal</p>
+        <!-- Maintenance Banner -->
+        <div id="maintBanner" class="hidden glass p-4 rounded-2xl flex items-center justify-between border-l-4 border-yellow-500 mb-6">
+            <div class="flex items-center gap-3">
+                <i data-lucide="alert-triangle" class="text-yellow-500 w-5"></i>
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-widest text-yellow-500">Mode Perbaikan Aktif</p>
+                    <p class="text-[10px] text-slate-400">Sistem sedang maintenance, bot tidak merespon pesan</p>
+                </div>
+            </div>
         </div>
-    </div>
-    <button onclick="toggleMaintenance()" id="maintBtn" class="px-6 py-2 rounded-xl bg-slate-800 text-xs font-bold hover:bg-slate-700 transition">
-        AKTIFKAN
-    </button>
-</div>
-        
+
+        <!-- Header Section -->
         <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
                 <h2 id="tabTitle" class="text-3xl font-bold">Overview</h2>
-                <div id="botStatus" class="flex items-center gap-2 mt-1 text-sm text-slate-400">
-                    <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
-                    <span id="statusText">Menghubungkan...</span>
+                <div class="flex items-center gap-4 mt-2">
+                    <div id="botStatus" class="flex items-center gap-2 text-sm text-slate-400">
+                        <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
+                        <span id="statusText">Menghubungkan...</span>
+                    </div>
+                    <button onclick="toggleMaintenance()" id="maintBtn" class="text-xs px-3 py-1 rounded-full bg-slate-800 hover:bg-slate-700 transition border border-slate-700">
+                        Maintenance: OFF
+                    </button>
                 </div>
             </div>
-            <div id="qrContainer" class="hidden glass p-3 rounded-2xl bg-white shadow-2xl shadow-green-500/10">
-                <div id="qrArea"></div>
-                <p class="text-[9px] text-slate-900 font-bold text-center mt-2">PINDAI WHATSAPP</p>
+            <div id="qrContainer" class="hidden glass p-4 rounded-2xl bg-white">
+                <div id="qrArea" class="w-40 h-40 flex items-center justify-center bg-slate-100 rounded-lg"></div>
+                <p class="text-[10px] text-slate-900 font-bold text-center mt-2">SCAN WHATSAPP</p>
             </div>
         </div>
 
+        <!-- OVERVIEW TAB -->
         <div id="tab-overview" class="tab-content tab-active space-y-6">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div class="glass p-6 rounded-3xl">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="glass p-6 rounded-2xl">
                     <p class="text-slate-400 text-xs font-bold uppercase tracking-widest">Total Users</p>
-                    <h3 id="stat-total" class="text-4xl font-bold mt-2">0</h3>
+                    <h3 id="stat-total" class="text-3xl font-bold mt-2">0</h3>
                 </div>
-                <div class="glass p-6 rounded-3xl border-l-4 border-green-500">
+                <div class="glass p-6 rounded-2xl border-l-4 border-green-500">
                     <p class="text-slate-400 text-xs font-bold uppercase tracking-widest text-green-400">User PRO</p>
-                    <h3 id="stat-pro" class="text-4xl font-bold mt-2">0</h3>
+                    <h3 id="stat-pro" class="text-3xl font-bold mt-2">0</h3>
                 </div>
-                <div class="glass p-6 rounded-3xl">
-                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest">System Health</p>
-                    <h3 class="text-lg font-bold mt-2 text-green-400 flex items-center gap-2">Excellent <i data-lucide="check-circle" class="w-4"></i></h3>
+                <div class="glass p-6 rounded-2xl border-l-4 border-blue-500">
+                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest text-blue-400">User DEMO</p>
+                    <h3 id="stat-demo" class="text-3xl font-bold mt-2">0</h3>
+                </div>
+                <div class="glass p-6 rounded-2xl">
+                    <p class="text-slate-400 text-xs font-bold uppercase tracking-widest">Pending Requests</p>
+                    <h3 id="stat-pending" class="text-3xl font-bold mt-2">0</h3>
                 </div>
             </div>
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div class="glass p-6 rounded-3xl">
-                    <h4 class="text-sm font-bold text-slate-500 mb-6 uppercase">Traffic 7 Hari Terakhir</h4>
+                <div class="glass p-6 rounded-2xl">
+                    <h4 class="text-sm font-bold text-slate-500 mb-6 uppercase">Statistik 7 Hari</h4>
                     <canvas id="trafficChart" height="200"></canvas>
                 </div>
-                <div class="bg-black border border-slate-800 rounded-3xl flex flex-col overflow-hidden">
-                    <div class="bg-slate-900 px-4 py-2 border-bottom border-slate-800 flex items-center gap-2">
-                        <div class="w-2 h-2 rounded-full bg-red-500"></div>
-                        <span class="text-[10px] font-mono text-slate-500">live_activity.log</span>
+                <div class="bg-black border border-slate-800 rounded-2xl flex flex-col overflow-hidden">
+                    <div class="bg-slate-900 px-4 py-2 border-b border-slate-800 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                            <span class="text-[10px] font-mono text-slate-500">live_activity.log</span>
+                        </div>
+                        <button onclick="clearLogs()" class="text-[10px] text-slate-500 hover:text-white">Clear</button>
                     </div>
-                    <div id="logArea" class="p-4 flex-1 h-[250px] overflow-y-auto font-mono text-[11px] space-y-2">
-                        <div class="text-slate-600">[SYSTEM] Menginisialisasi log terminal...</div>
+                    <div id="logArea" class="p-4 flex-1 h-[250px] overflow-y-auto font-mono text-[11px] space-y-1">
+                        <div class="text-slate-600">[SYSTEM] Dashboard initialized...</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div id="tab-users" class="tab-content">
-            <div class="glass rounded-3xl overflow-hidden">
+        <!-- USERS TAB -->
+        <div id="tab-users" class="tab-content space-y-6">
+            <div class="flex justify-between items-center">
+                <h3 class="text-xl font-bold">User Management</h3>
+                <div class="flex gap-2">
+                    <input type="text" id="searchUser" placeholder="Cari user..." onkeyup="filterUsers()" class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-green-500">
+                </div>
+            </div>
+            
+            <div class="glass rounded-2xl overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-slate-800/50 text-[10px] uppercase text-slate-500 font-bold">
+                            <tr>
+                                <th class="p-4">Nama Toko</th>
+                                <th class="p-4">WhatsApp</th>
+                                <th class="p-4">Status</th>
+                                <th class="p-4">Tanggal Daftar</th>
+                                <th class="p-4 text-right">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="userTable" class="text-sm"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- BROADCAST TAB -->
+        <div id="tab-broadcast" class="tab-content space-y-6">
+            <div class="glass p-6 rounded-2xl max-w-3xl">
+                <h3 class="text-xl font-bold mb-6">Broadcast Pesan</h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Target Penerima</label>
+                        <select id="broadcastTarget" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-green-500" onchange="toggleSpecificTargets()">
+                            <option value="all">Semua User</option>
+                            <option value="pro">User PRO Only</option>
+                            <option value="demo">User DEMO Only</option>
+                            <option value="specific">Pilih Manual</option>
+                        </select>
+                    </div>
+
+                    <div id="specificTargetsContainer" class="hidden">
+                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Pilih User</label>
+                        <div id="userCheckboxes" class="max-h-40 overflow-y-auto bg-slate-800 rounded-lg p-3 space-y-2 text-sm"></div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Isi Pesan</label>
+                        <textarea id="broadcastMessage" rows="6" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-green-500 resize-none" placeholder="Ketik pesan broadcast di sini..."></textarea>
+                    </div>
+
+                    <div class="flex items-center justify-between pt-4">
+                        <div class="text-xs text-slate-500">
+                            <span id="charCount">0</span> karakter | Estimasi waktu: <span id="estTime">0</span> detik
+                        </div>
+                        <button onclick="sendBroadcast()" id="btnBroadcast" class="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2">
+                            <i data-lucide="send" class="w-4"></i> Kirim Broadcast
+                        </button>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div id="broadcastProgress" class="hidden">
+                        <div class="w-full bg-slate-800 rounded-full h-2 mt-4">
+                            <div id="progressBar" class="bg-green-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                        <p id="progressText" class="text-xs text-center mt-2 text-slate-400">Menyiapkan...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- UPGRADE REQUESTS TAB -->
+        <div id="tab-upgrades" class="tab-content space-y-6">
+            <div class="flex justify-between items-center">
+                <h3 class="text-xl font-bold">Permintaan Upgrade</h3>
+                <button onclick="loadUpgradeRequests()" class="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg transition">
+                    <i data-lucide="refresh-cw" class="w-3 inline"></i> Refresh
+                </button>
+            </div>
+
+            <div class="glass rounded-2xl overflow-hidden">
                 <table class="w-full text-left border-collapse">
                     <thead class="bg-slate-800/50 text-[10px] uppercase text-slate-500 font-bold">
                         <tr>
-                            <th class="p-4">Nama Toko</th>
-                            <th class="p-4">WhatsApp</th>
-                            <th class="p-4">Status</th>
-                            <th class="p-4">Aksi</th>
+                            <th class="p-4">User</th>
+                            <th class="p-4">Tanggal Request</th>
+                            <th class="p-4">Alasan</th>
+                            <th class="p-4 text-right">Aksi</th>
                         </tr>
                     </thead>
-                    <tbody id="userTable" class="text-sm"></tbody>
+                    <tbody id="upgradeTable" class="text-sm">
+                        <tr>
+                            <td colspan="4" class="p-8 text-center text-slate-500">Memuat data...</td>
+                        </tr>
+                    </tbody>
                 </table>
             </div>
         </div>
 
     </main>
 
-    <script>
-        const socket = io();
-        lucide.createIcons();
-        let isMaintenance = false;
+    <!-- Edit User Modal -->
+    <div id="editModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass rounded-2xl p-6 w-full max-w-md">
+            <h3 class="text-xl font-bold mb-4">Edit User</h3>
+            <input type="hidden" id="editUserId">
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Nama Toko</label>
+                    <input type="text" id="editStoreName" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Status Paket</label>
+                    <select id="editStatus" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm">
+                        <option value="demo">DEMO</option>
+                        <option value="pro">PRO</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closeEditModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg text-sm transition">Batal</button>
+                <button onclick="saveUserEdit()" class="flex-1 bg-green-600 hover:bg-green-500 py-2 rounded-lg text-sm font-bold transition">Simpan</button>
+            </div>
+        </div>
+    </div>
 
-        // 1. CHART SETUP
-        const ctx = document.getElementById('trafficChart').getContext('2d');
-        const trafficChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'],
-                datasets: [{
-                    label: 'Pesan Masuk',
-                    data: [5, 12, 8, 15, 10, 20, 18],
-                    borderColor: '#10b981',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                    fill: true, tension: 0.4
-                }]
-            },
-            options: { plugins: { legend: { display: false } }, scales: { y: { display: false }, x: { grid: { display: false } } } }
+    <script>
+        // Global State
+        const socket = io();
+        let currentData = { users: [], stats: {} };
+        let isMaintenance = false;
+        let allUsers = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            initChart();
+            loadData();
+            setupEventListeners();
         });
 
-        // 2. TAB LOGIC
+        // Chart Setup
+        function initChart() {
+            const ctx = document.getElementById('trafficChart').getContext('2d');
+            window.trafficChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'],
+                    datasets: [{
+                        label: 'Aktivitas',
+                        data: [0, 0, 0, 0, 0, 0, 0],
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { display: false },
+                        x: { grid: { display: false, color: '#1e293b' }, ticks: { color: '#64748b' } }
+                    }
+                }
+            });
+        }
+
+        // Tab Switching
         function switchTab(tab) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('tab-active'));
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('bg-slate-800', 'text-white'));
+            document.querySelectorAll('.nav-btn').forEach(b => {
+                b.classList.remove('bg-slate-800', 'text-white');
+                b.classList.add('text-slate-400');
+            });
             
             document.getElementById('tab-' + tab).classList.add('tab-active');
-            document.getElementById('btn-' + tab).classList.add('bg-slate-800', 'text-white');
-            document.getElementById('tabTitle').innerText = tab.charAt(0).toUpperCase() + tab.slice(1);
-            if(tab === 'users') fetchUsers();
+            const btn = document.getElementById('btn-' + tab);
+            btn.classList.add('bg-slate-800', 'text-white');
+            btn.classList.remove('text-slate-400');
+            
+            document.getElementById('tabTitle').innerText = tab.charAt(0).toUpperCase() + tab.slice(1).replace('-', ' ');
+            
+            if (tab === 'users') renderUserTable();
+            if (tab === 'upgrades') loadUpgradeRequests();
+            if (tab === 'broadcast') loadUserCheckboxes();
+            
+            lucide.createIcons();
         }
 
-        // 3. FETCH DATA
-        async function fetchStats() {
-            const res = await fetch('/api/admin/data');
-            const data = await res.json();
-            document.getElementById('stat-total').innerText = data.stats.total;
-            document.getElementById('stat-pro').innerText = data.stats.pro;
+        // Data Loading
+        async function loadData() {
+            try {
+                const res = await fetch('/api/admin/data');
+                if (!res.ok) throw new Error('Failed to fetch');
+                const data = await res.json();
+                
+                currentData = data;
+                allUsers = data.users || [];
+                
+                // Update stats
+                document.getElementById('stat-total').innerText = data.stats.total;
+                document.getElementById('stat-pro').innerText = data.stats.pro;
+                document.getElementById('stat-demo').innerText = data.stats.demo;
+                document.getElementById('stat-pending').innerText = data.stats.pendingRequests || 0;
+                
+                // Update maintenance state
+                isMaintenance = data.stats.maintenance;
+                updateMaintenanceUI();
+                
+                // Update badge
+                if (data.stats.pendingRequests > 0) {
+                    document.getElementById('upgradeBadge').classList.remove('hidden');
+                }
+                
+            } catch (err) {
+                showToast('Error loading data: ' + err.message, 'error');
+            }
         }
 
-        async function fetchUsers() {
-            const res = await fetch('/api/admin/data');
-            const data = await res.json();
-            document.getElementById('userTable').innerHTML = data.users.map(u => `
-                <tr class="border-t border-slate-800/40 hover:bg-slate-800/20">
-                    <td class="p-4 font-bold">${u.store_name}</td>
-                    <td class="p-4 text-slate-400 font-mono">${u.id.split('@')[0]}</td>
-                    <td class="p-4"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase ${u.status === 'pro' ? 'bg-green-500/20 text-green-400' : 'bg-slate-700 text-slate-400'}">${u.status}</span></td>
-                    <td class="p-4"><button class="text-xs text-blue-400 hover:underline">Edit</button></td>
-                </tr>
-            `).join('');
-        }
-
-        // 4. REALTIME SOCKETS
+        // Real-time Socket Events
         socket.on('bot_update', (data) => {
-            document.getElementById('statusText').innerText = data.status;
-            const indicator = document.querySelector('#botStatus span');
-            if(data.status === 'Online') {
-                indicator.className = "w-2 h-2 rounded-full bg-green-500";
+            const statusText = document.getElementById('statusText');
+            const indicator = statusText.parentElement.querySelector('span');
+            
+            statusText.innerText = data.status;
+            
+            if (data.ready) {
+                indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
                 document.getElementById('qrContainer').classList.add('hidden');
-            } else if(data.qr) {
+            } else if (data.qr) {
+                indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
                 document.getElementById('qrContainer').classList.remove('hidden');
-                document.getElementById('qrArea').innerHTML = `<img src="${data.qr}" class="w-32 h-32" />`;
+                document.getElementById('qrArea').innerHTML = `<img src="${data.qr}" class="w-full h-full" />`;
+            } else {
+                indicator.className = "w-2 h-2 rounded-full bg-red-500";
             }
         });
 
         socket.on('new_log', (data) => {
-            const area = document.getElementById('logArea');
-            const item = document.createElement('div');
-            item.innerHTML = `<span class="text-slate-500">${new Date().toLocaleTimeString()}</span> <span class="text-green-500">MSG_IN:</span> <span class="text-white">${data.body}</span>`;
-            area.prepend(item); // Masukkan ke atas
+            addLogEntry(data);
         });
 
-        
+        socket.on('maintenance_update', (data) => {
+            isMaintenance = data.enabled;
+            updateMaintenanceUI();
+            showToast(`Maintenance mode ${data.enabled ? 'enabled' : 'disabled'}`, 'info');
+        });
 
-// Fungsi untuk mengambil status awal saat page load
-async function loadMaintenanceStatus() {
-    const res = await fetch('/api/admin/data');
-    const data = await res.json();
-    isMaintenance = data.stats.maintenance;
-    updateMaintUI();
-}
+        socket.on('broadcast_progress', (data) => {
+            const percent = (data.current / data.total) * 100;
+            document.getElementById('progressBar').style.width = percent + '%';
+            document.getElementById('progressText').innerText = `Mengirim ${data.current}/${data.total} (${data.success} sukses, ${data.failed} gagal)`;
+        });
 
-function updateMaintUI() {
-    const btn = document.getElementById('maintBtn');
-    const label = document.getElementById('maintStatusLabel');
-    
-    if (isMaintenance) {
-        btn.innerHTML = "MATIKAN";
-        btn.className = "px-6 py-2 rounded-xl bg-red-600 text-white text-xs font-bold hover:bg-red-500 transition";
-        label.innerText = "Mode Perbaikan AKTIF (Pesan otomatis telah dikirim)";
-    } else {
-        btn.innerHTML = "AKTIFKAN";
-        btn.className = "px-6 py-2 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-slate-700 transition";
-        label.innerText = "Sistem berjalan normal";
-    }
-}
+        socket.on('broadcast_complete', (data) => {
+            document.getElementById('btnBroadcast').disabled = false;
+            document.getElementById('btnBroadcast').innerHTML = '<i data-lucide="send" class="w-4"></i> Kirim Broadcast';
+            lucide.createIcons();
+            showToast(`Broadcast selesai! ${data.success} sukses, ${data.failed} gagal`, 'success');
+            setTimeout(() => {
+                document.getElementById('broadcastProgress').classList.add('hidden');
+            }, 3000);
+        });
 
-async function toggleMaintenance() {
-    const confirmMsg = isMaintenance 
-        ? "Matikan mode perbaikan? User akan dikirimi pesan bahwa sistem sudah normal." 
-        : "Aktifkan mode perbaikan? Bot akan mengirim pesan otomatis ke SEMUA user.";
-        
-    if (!confirm(confirmMsg)) return;
+        // User Table
+        function renderUserTable(filter = '') {
+            const tbody = document.getElementById('userTable');
+            const filtered = allUsers.filter(u => 
+                u.store_name?.toLowerCase().includes(filter.toLowerCase()) || 
+                u.id?.includes(filter)
+            );
+            
+            tbody.innerHTML = filtered.map(u => `
+                <tr class="border-t border-slate-800/40 hover:bg-slate-800/20 transition">
+                    <td class="p-4 font-bold">${u.store_name || 'Unknown'}</td>
+                    <td class="p-4 text-slate-400 font-mono text-xs">${u.id?.split('@')[0] || '-'}</td>
+                    <td class="p-4">
+                        <button onclick="toggleUserPackage('${u.id}', '${u.status}')" 
+                            class="px-3 py-1 rounded-full text-[10px] font-bold uppercase transition ${u.status === 'pro' ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}">
+                            ${u.status}
+                        </button>
+                    </td>
+                    <td class="p-4 text-slate-400 text-xs">${new Date(u.created_at).toLocaleDateString('id-ID')}</td>
+                    <td class="p-4 text-right">
+                        <button onclick="openEditModal('${u.id}', '${u.store_name}', '${u.status}')" class="text-blue-400 hover:text-blue-300 text-xs mr-3">Edit</button>
+                        <button onclick="deleteUser('${u.id}')" class="text-red-400 hover:text-red-300 text-xs">Hapus</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
 
-    const res = await fetch('/api/admin/toggle-maintenance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !isMaintenance })
-    });
+        function filterUsers() {
+            const search = document.getElementById('searchUser').value;
+            renderUserTable(search);
+        }
 
-    if (res.ok) {
-        isMaintenance = !isMaintenance;
-        updateMaintUI();
-        alert("Status berhasil diperbarui!");
-    }
-}
+        // Toggle Package
+        async function toggleUserPackage(userId, currentStatus) {
+            if (!confirm(`Ubah status ke ${currentStatus === 'pro' ? 'DEMO' : 'PRO'}?`)) return;
+            
+            try {
+                const res = await fetch(`/api/admin/user/${userId}/toggle-package`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`Status diubah ke ${data.newStatus}`, 'success');
+                    loadData();
+                    renderUserTable(document.getElementById('searchUser').value);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
 
-// Panggil fungsi saat load
-loadMaintenanceStatus();
+        // Edit User Modal
+        function openEditModal(id, name, status) {
+            document.getElementById('editUserId').value = id;
+            document.getElementById('editStoreName').value = name || '';
+            document.getElementById('editStatus').value = status || 'demo';
+            document.getElementById('editModal').classList.remove('hidden');
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.add('hidden');
+        }
+
+        async function saveUserEdit() {
+            const id = document.getElementById('editUserId').value;
+            const store_name = document.getElementById('editStoreName').value;
+            const status = document.getElementById('editStatus').value;
+            
+            try {
+                const res = await fetch(`/api/admin/user/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ store_name, status })
+                });
+                
+                if (res.ok) {
+                    showToast('User updated', 'success');
+                    closeEditModal();
+                    loadData();
+                    renderUserTable();
+                } else {
+                    throw new Error('Failed to update');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
+        async function deleteUser(id) {
+            if (!confirm('Hapus user ini? Tindakan tidak bisa dibatalkan.')) return;
+            
+            try {
+                const res = await fetch(`/api/admin/user/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('User dihapus', 'success');
+                    loadData();
+                    renderUserTable();
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
+        // Upgrade Requests
+        async function loadUpgradeRequests() {
+            try {
+                const res = await fetch('/api/admin/upgrade-requests');
+                const data = await res.json();
+                const tbody = document.getElementById('upgradeTable');
+                
+                if (data.requests.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-500">Tidak ada permintaan pending</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = data.requests.map(r => `
+                    <tr class="border-t border-slate-800/40">
+                        <td class="p-4">
+                            <div class="font-bold">${r.users?.store_name || 'Unknown'}</div>
+                            <div class="text-xs text-slate-500">${r.user_id?.split('@')[0]}</div>
+                        </td>
+                        <td class="p-4 text-xs text-slate-400">${new Date(r.created_at).toLocaleDateString('id-ID')}</td>
+                        <td class="p-4 text-xs">${r.reason || '-'}</td>
+                        <td class="p-4 text-right space-x-2">
+                            <button onclick="processUpgrade('${r.id}', 'approve')" class="bg-green-600/20 text-green-400 hover:bg-green-600/30 px-3 py-1 rounded text-xs transition">Approve</button>
+                            <button onclick="processUpgrade('${r.id}', 'reject')" class="bg-red-600/20 text-red-400 hover:bg-red-600/30 px-3 py-1 rounded text-xs transition">Reject</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                showToast('Error loading requests', 'error');
+            }
+        }
+
+        async function processUpgrade(requestId, action) {
+            const reason = action === 'reject' ? prompt('Alasan penolakan:') : null;
+            
+            try {
+                const res = await fetch(`/api/admin/upgrade-requests/${requestId}/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                
+                if (res.ok) {
+                    showToast(`Upgrade ${action === 'approve' ? 'disetujui' : 'ditolak'}`, 'success');
+                    loadUpgradeRequests();
+                    loadData(); // Refresh stats
+                }
+            } catch (err) {
+                showToast('Error processing request', 'error');
+            }
+        }
+
+        // Broadcast
+        function loadUserCheckboxes() {
+            const container = document.getElementById('userCheckboxes');
+            container.innerHTML = allUsers.map(u => `
+                <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-700/50 p-1 rounded">
+                    <input type="checkbox" value="${u.id}" class="user-checkbox rounded border-slate-600 bg-slate-700 text-green-500 focus:ring-green-500">
+                    <span class="truncate">${u.store_name || u.id}</span>
+                    <span class="text-xs ${u.status === 'pro' ? 'text-green-400' : 'text-slate-500'} ml-auto">${u.status}</span>
+                </label>
+            `).join('');
+        }
+
+        function toggleSpecificTargets() {
+            const target = document.getElementById('broadcastTarget').value;
+            document.getElementById('specificTargetsContainer').classList.toggle('hidden', target !== 'specific');
+        }
+
+        async function sendBroadcast() {
+            const message = document.getElementById('broadcastMessage').value;
+            const target = document.getElementById('broadcastTarget').value;
+            
+            if (!message.trim()) {
+                showToast('Pesan tidak boleh kosong', 'error');
+                return;
+            }
+            
+            let userIds = [];
+            if (target === 'specific') {
+                userIds = Array.from(document.querySelectorAll('.user-checkbox:checked')).map(cb => cb.value);
+                if (userIds.length === 0) {
+                    showToast('Pilih minimal 1 user', 'error');
+                    return;
+                }
+            }
+            
+            document.getElementById('broadcastProgress').classList.remove('hidden');
+            document.getElementById('btnBroadcast').disabled = true;
+            document.getElementById('btnBroadcast').innerHTML = 'Mengirim...';
+            
+            try {
+                const res = await fetch('/api/admin/broadcast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, target, userIds })
+                });
+                
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                
+                showToast(data.message, 'success');
+                document.getElementById('broadcastMessage').value = '';
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+                document.getElementById('broadcastProgress').classList.add('hidden');
+                document.getElementById('btnBroadcast').disabled = false;
+                document.getElementById('btnBroadcast').innerHTML = '<i data-lucide="send" class="w-4"></i> Kirim Broadcast';
+                lucide.createIcons();
+            }
+        }
+
+        // Maintenance Toggle
+        function updateMaintenanceUI() {
+            const btn = document.getElementById('maintBtn');
+            const banner = document.getElementById('maintBanner');
+            
+            if (isMaintenance) {
+                btn.innerHTML = 'Maintenance: ON';
+                btn.classList.add('bg-yellow-600', 'text-white');
+                btn.classList.remove('bg-slate-800');
+                banner.classList.remove('hidden');
+            } else {
+                btn.innerHTML = 'Maintenance: OFF';
+                btn.classList.remove('bg-yellow-600', 'text-white');
+                btn.classList.add('bg-slate-800');
+                banner.classList.add('hidden');
+            }
+        }
+
+        async function toggleMaintenance() {
+            const action = isMaintenance ? 'matikan' : 'aktifkan';
+            if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} mode maintenance?`)) return;
+            
+            try {
+                const res = await fetch('/api/admin/toggle-maintenance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: !isMaintenance })
+                });
+                
+                if (res.ok) {
+                    showToast(`Maintenance ${action}kan`, 'success');
+                }
+            } catch (err) {
+                showToast('Error toggling maintenance', 'error');
+            }
+        }
+
+        // Utilities
+        function addLogEntry(data) {
+            const area = document.getElementById('logArea');
+            const item = document.createElement('div');
+            item.className = 'border-l-2 border-slate-700 pl-2 animate-pulse';
+            
+            let content = '';
+            if (data.type === 'error') {
+                content = `<span class="text-red-400">[ERROR]</span> <span class="text-slate-300">${data.error}</span>`;
+                item.classList.add('border-red-500');
+            } else {
+                content = `<span class="text-slate-600">${new Date(data.timestamp).toLocaleTimeString()}</span> <span class="text-green-500">MSG:</span> <span class="text-white truncate">${data.body}</span>`;
+                item.classList.add('border-green-500');
+            }
+            
+            item.innerHTML = content;
+            area.insertBefore(item, area.firstChild);
+            
+            // Keep only last 50 logs
+            while (area.children.length > 50) {
+                area.removeChild(area.lastChild);
+            }
+            
+            setTimeout(() => item.classList.remove('animate-pulse'), 1000);
+        }
+
+        function clearLogs() {
+            document.getElementById('logArea').innerHTML = '<div class="text-slate-600">[SYSTEM] Logs cleared...</div>';
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            
+            const colors = {
+                success: 'border-green-500 bg-green-500/10 text-green-400',
+                error: 'border-red-500 bg-red-500/10 text-red-400',
+                info: 'border-blue-500 bg-blue-500/10 text-blue-400'
+            };
+            
+            toast.className = `toast glass px-4 py-3 rounded-lg border-l-4 ${colors[type]} flex items-center gap-3 min-w-[300px] shadow-2xl`;
+            toast.innerHTML = `
+                <i data-lucide="${type === 'success' ? 'check-circle' : type === 'error' ? 'alert-circle' : 'info'}" class="w-5"></i>
+                <span class="text-sm font-medium">${message}</span>
+            `;
+            
+            container.appendChild(toast);
+            lucide.createIcons();
+            
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(100%)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
 
         async function logout() {
             await fetch('/admin/logout', { method: 'POST' });
             window.location.href = '/admin-login.html';
         }
 
+        function setupEventListeners() {
+            // Character count for broadcast
+            document.getElementById('broadcastMessage')?.addEventListener('input', function(e) {
+                document.getElementById('charCount').innerText = e.target.value.length;
+                const targets = document.getElementById('broadcastTarget').value === 'specific' 
+                    ? document.querySelectorAll('.user-checkbox:checked').length 
+                    : allUsers.length;
+                document.getElementById('estTime').innerText = targets * 1.5;
+            });
+        }
 
-
-        fetchStats();
+        // Refresh data every 30 seconds
+        setInterval(loadData, 30000);
     </script>
 </body>
 </html>

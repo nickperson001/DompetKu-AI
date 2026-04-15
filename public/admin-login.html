@@ -3,48 +3,61 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login HQ - DompetKu</title>
+    <title>Login - DompetKu</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #020617; color: #f8fafc; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); }
+        body { background: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); }
     </style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-6">
-    <div class="w-full max-w-sm glass p-10 rounded-[40px] shadow-2xl">
-        <div class="text-center mb-10">
-            <h1 class="text-4xl font-black text-green-500 tracking-tighter">DompetKu</h1>
-            <p class="text-slate-400 text-xs mt-2 uppercase tracking-widest font-bold">Secure Access</p>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="glass p-8 rounded-3xl w-full max-w-md space-y-6">
+        <div class="text-center">
+            <h1 class="text-3xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent mb-2">DompetKu</h1>
+            <p class="text-slate-400 text-sm">Admin Dashboard</p>
         </div>
-
+        
         <form id="loginForm" class="space-y-4">
-            <input type="text" id="username" placeholder="Username" required 
-                class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
-            <input type="password" id="password" placeholder="Password" required 
-                class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
-            
-            <button type="submit" id="btn" class="w-full bg-green-600 hover:bg-green-500 py-4 rounded-2xl font-bold transition-all shadow-lg shadow-green-900/30">
-                Masuk ke Dashboard
+            <div>
+                <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Username</label>
+                <input type="text" id="username" required class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-green-500 transition">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-400 uppercase mb-2">Password</label>
+                <input type="password" id="password" required class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-green-500 transition">
+            </div>
+            <button type="submit" class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg transition">
+                Login
             </button>
-            <p id="err" class="hidden text-red-400 text-[10px] text-center font-bold">USERNAME ATAU PASSWORD SALAH</p>
         </form>
+        
+        <div id="errorMsg" class="hidden text-red-400 text-sm text-center"></div>
     </div>
 
     <script>
-        document.getElementById('loginForm').onsubmit = async (e) => {
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const res = await fetch('/admin/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: document.getElementById('username').value,
-                    password: document.getElementById('password').value
-                })
-            });
-            const data = await res.json();
-            if (data.success) window.location.href = '/';
-            else document.getElementById('err').classList.remove('hidden');
-        };
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const res = await fetch('/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                if (res.ok) {
+                    window.location.href = '/';
+                } else {
+                    document.getElementById('errorMsg').innerText = 'Invalid credentials';
+                    document.getElementById('errorMsg').classList.remove('hidden');
+                }
+            } catch (err) {
+                document.getElementById('errorMsg').innerText = 'Connection error';
+                document.getElementById('errorMsg').classList.remove('hidden');
+            }
+        });
     </script>
 </body>
 </html>
