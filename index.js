@@ -8,6 +8,8 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const session = require('express-session');
 const os = require('os');
 require('dotenv').config();
+// Tambah ini di baris 8 (setelah dotenv)
+const pg = require('pg');
 
 // Existing imports
 const { handleMessage } = require('./src/handlers/message');
@@ -61,13 +63,29 @@ async function loadSessionFromDB() {
 // ════════════════════════════════════════════════════════════
 // SETUP MIDDLEWARE
 // ════════════════════════════════════════════════════════════
+// Session store dengan Supabase PostgreSQL (anti-logout tiap redeploy)
+const { Pool } = require('pg');
+const pgSession = require('connect-pg-simple')(session);
+
+const pgPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+});
+
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'dompetku-secret-key-change-in-production',
+    store: new pgSession({
+        pool: pgPool,
+        tableName: 'user_sessions',
+        createTableIfMissing: true
+    }),
+    secret: process.env.SESSION_SECRET || 'ganti-ini-dengan-random-string-32-karakter',
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 24 * 60 * 60 * 1000 }
+    cookie: { 
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 30 * 24 * 60 * 60 * 1000 
+    }
 }));
-
 app.use(express.json());
 app.use(express.static('public'));
 
