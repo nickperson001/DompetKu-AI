@@ -247,10 +247,10 @@ app.get('/health', async (req, res) => {
 // ════════════════════════════════════════════════════════════
 app.post('/admin/login', (req, res) => {
     const { username, password } = req.body;
-    const validUser = process.env.ADMIN_USERNAME || 'admin';
-    const validPass = process.env.ADMIN_PASSWORD || 'admin123';
+    const validUser = (process.env.ADMIN_USERNAME || 'admin').trim();
+    const validPass = (process.env.ADMIN_PASSWORD || 'admin123').trim();
 
-    if (username === validUser && password === validPass) {
+    if (username?.trim() === validUser && password?.trim() === validPass) {
         req.session.authenticated = true;
         req.session.loginAt = new Date().toISOString();
 
