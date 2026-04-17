@@ -19,7 +19,7 @@ const supabase           = require('./src/config/supabase');
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server);
-const port   = process.env.PORT || 3000;
+const port   = process.env.PORT;
 
 // ════════════════════════════════════════════════════════════
 // SESSION STORE (PostgreSQL — anti-logout saat redeploy)
