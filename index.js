@@ -38,10 +38,11 @@ function buildSessionMiddleware() {
         resave           : false,
         saveUninitialized: false,
         cookie: {
-            secure  : process.env.NODE_ENV === 'production',
-            maxAge  : 30 * 24 * 60 * 60 * 1000,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            maxAge: 30 * 24 * 60 * 60 * 1000,
             httpOnly: true,
-        },
+        }
     };
 
     if (!process.env.DATABASE_URL) {
@@ -72,6 +73,7 @@ function buildSessionMiddleware() {
 
 const sessionMiddleware = buildSessionMiddleware();
 
+app.set('trust proxy', 1);
 app.use(sessionMiddleware);
 app.use(express.json());
 
@@ -251,8 +253,16 @@ app.post('/admin/login', (req, res) => {
     if (username === validUser && password === validPass) {
         req.session.authenticated = true;
         req.session.loginAt = new Date().toISOString();
-        addLog('info', `Admin login from ${req.ip}`);
-        res.json({ success: true });
+
+        return req.session.save((err) => {
+            if (err) {
+                addLog('error', `Session save failed: ${err.message}`);
+                return res.status(500).json({ success: false, error: 'Session save failed' });
+            }
+
+            addLog('info', `Admin login from ${req.ip}`);
+            res.json({ success: true });
+        });
     } else {
         addLog('warn', `Failed login: ${username} from ${req.ip}`);
         res.status(401).json({ success: false });
