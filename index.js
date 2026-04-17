@@ -19,13 +19,13 @@ const supabase           = require('./src/config/supabase');
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server);
-const port   = process.env.PORT || 3000;
+const port   = process.env.PORT;
 
 // ════════════════════════════════════════════════════════════
 // SESSION STORE (PostgreSQL — anti-logout saat redeploy)
 // ════════════════════════════════════════════════════════════
 const pgPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: process.env.DATABASE_URL, // Pastikan ini sudah pakai URL Port 6543
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
@@ -121,7 +121,7 @@ const addLog = (level, message, data = {}) => {
 // WHATSAPP CLIENT
 // ════════════════════════════════════════════════════════════
 const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: '/tmp/wa-session' }),
+    authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
     puppeteer: {
         headless: true,
         args: [
