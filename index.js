@@ -19,7 +19,7 @@ const supabase           = require('./src/config/supabase');
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server);
-const port   = process.env.PORT;
+const port   = process.env.PORT || 3000;
 
 // ════════════════════════════════════════════════════════════
 // SESSION STORE (PostgreSQL — anti-logout saat redeploy)
@@ -29,22 +29,48 @@ const pgPool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
-// FIX #3: Buat satu sessionMiddleware yang dipakai BERSAMA express DAN socket.io
-const sessionMiddleware = session({
-    store: new pgSession({
-        pool              : pgPool,
-        tableName         : 'user_sessions',
-        createTableIfMissing: true,
-    }),
-    secret           : process.env.SESSION_SECRET || 'dompetku-secret-ganti-ini-32char!!',
-    resave           : false,
-    saveUninitialized: false,
-    cookie: {
-        secure  : process.env.NODE_ENV === 'production',
-        maxAge  : 30 * 24 * 60 * 60 * 1000, // 30 hari
-        httpOnly: true,
-    },
-});
+// FIX #3: Session middleware dengan fallback ke memory store
+// Jika DATABASE_URL tidak diset atau pg gagal konek → pakai memory store
+// Memory store cukup untuk satu instance Railway (session hilang saat redeploy, tapi login tetap jalan)
+function buildSessionMiddleware() {
+    const base = {
+        secret           : process.env.SESSION_SECRET || 'dompetku-secret-ganti-ini-32char!!',
+        resave           : false,
+        saveUninitialized: false,
+        cookie: {
+            secure  : process.env.NODE_ENV === 'production',
+            maxAge  : 30 * 24 * 60 * 60 * 1000,
+            httpOnly: true,
+        },
+    };
+
+    if (!process.env.DATABASE_URL) {
+        console.warn('[SESSION] ⚠️  DATABASE_URL tidak diset — pakai memory store (session hilang saat restart)');
+        return session(base);
+    }
+
+    try {
+        const store = new pgSession({
+            pool                : pgPool,
+            tableName           : 'user_sessions',
+            createTableIfMissing: true,
+            errorLog            : (err) => console.error('[SESSION] pg store error:', err.message),
+        });
+
+        // Tangkap error koneksi awal agar tidak crash server
+        store.on && store.on('error', (err) => {
+            console.error('[SESSION] Store error (non-fatal):', err.message);
+        });
+
+        console.log('[SESSION] ✅ PostgreSQL session store aktif');
+        return session({ ...base, store });
+    } catch (err) {
+        console.error('[SESSION] ❌ Gagal init pg store, fallback ke memory:', err.message);
+        return session(base);
+    }
+}
+
+const sessionMiddleware = buildSessionMiddleware();
 
 app.use(sessionMiddleware);
 app.use(express.json());

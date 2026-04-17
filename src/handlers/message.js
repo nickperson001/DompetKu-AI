@@ -12,7 +12,7 @@ const PACKAGES = {
     label    : 'PRO Bulanan',
     emoji    : '⭐',
     price    : 29_000,
-    priceStr : 'Rp 49.000/bulan',
+    priceStr : 'Rp 29.000/bulan',
     duration : 30,
     features : [
       'Transaksi tanpa batas per hari',
