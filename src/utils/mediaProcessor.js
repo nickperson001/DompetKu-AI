@@ -9,7 +9,7 @@ const path = require('path');
 const hf = new HfInference(process.env.HF_TOKEN);
 
 // Pastikan folder tmp ada
-const tmpDir = path.join(__dirname, '../../tmp');
+const tmpDir = '/tmp'; // Railway-safe: /tmp selalu writable
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 
 /**
@@ -63,8 +63,9 @@ async function extractTextFromImage(mediaObj) {
     // Proses OCR
     const { data: { text } } = await Tesseract.recognize(
       filePath,
-      'ind+eng', // Bahasa Indonesia + Inggris
-      { logger: m => {} } // Matikan log verbose
+      'ind+eng',
+      { langPath: path.join(__dirname, '..', '..', 'tessdata'), logger: () => {} }
+
     );
 
     return text ? text.trim() : '';

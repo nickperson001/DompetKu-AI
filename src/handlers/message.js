@@ -11,7 +11,7 @@ const PACKAGES = {
     key      : 'pro',
     label    : 'PRO Bulanan',
     emoji    : '⭐',
-    price    : 49_000,
+    price    : 29_000,
     priceStr : 'Rp 49.000/bulan',
     duration : 30,
     features : [
@@ -24,8 +24,8 @@ const PACKAGES = {
     key      : 'unlimited',
     label    : 'UNLIMITED Selamanya',
     emoji    : '💎',
-    price    : 199_000,
-    priceStr : 'Rp 199.000 (sekali bayar)',
+    price    : 299_000,
+    priceStr : 'Rp 299.000 (sekali bayar)',
     duration : null,
     features : [
       'Transaksi tanpa batas per hari',
