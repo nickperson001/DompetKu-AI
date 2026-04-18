@@ -11,8 +11,8 @@ const PACKAGES = {
     key      : 'pro',
     label    : 'PRO Bulanan',
     emoji    : '⭐',
-    price    : 29_000,
-    priceStr : 'Rp 29.000/bulan',
+    price    : 49_000,
+    priceStr : 'Rp 49.000/bulan',
     duration : 30,
     features : [
       'Transaksi tanpa batas per hari',
@@ -24,8 +24,8 @@ const PACKAGES = {
     key      : 'unlimited',
     label    : 'UNLIMITED Selamanya',
     emoji    : '💎',
-    price    : 299_000,
-    priceStr : 'Rp 299.000 (sekali bayar)',
+    price    : 199_000,
+    priceStr : 'Rp 199.000 (sekali bayar)',
     duration : null,
     features : [
       'Transaksi tanpa batas per hari',
@@ -48,8 +48,15 @@ const PAYMENT = {
 function parseCurrency(text) {
   if (!text || typeof text !== 'string') return null;
   let clean = text.toLowerCase().trim();
-  clean = clean.replace(/^rp.?/, '');
+  
+  // Tolak suffix non-currency (kg, gram, liter, buah, dll)
+  if (/\d+(kg|gr|gram|liter|ml|buah|biji|bungkus|pack|pcs|box|dus|karton|sak|meter|cm|mm|menit|jam|hari|minggu|bulan|tahun|orang|org)$/i.test(clean)) {
+    return null;
+  }
+  
+  clean = clean.replace(/^rp\.?\s*/, '').replace(/^:/, ''); // Hapus prefix "Rp" dan ":"
   let multiplier = 1;
+  
   if (/(?:jt|juta)$/.test(clean)) {
     multiplier = 1_000_000;
     clean = clean.replace(/(?:jt|juta)$/, '');
@@ -57,10 +64,11 @@ function parseCurrency(text) {
     multiplier = 1_000;
     clean = clean.replace(/(?:rb|ribu|k)$/, '');
   }
+  
   if (multiplier > 1) {
     clean = clean.replace(',', '.');
   } else {
-    const dotCount = (clean.match(/\./g) || []).length;
+    const dotCount   = (clean.match(/\./g) || []).length;
     const commaCount = (clean.match(/,/g) || []).length;
     if (dotCount === 1 && commaCount === 0) {
       if (clean.split('.')[1]?.length === 3) clean = clean.replace('.', '');
@@ -71,6 +79,7 @@ function parseCurrency(text) {
       clean = clean.replace(/[.,]/g, '');
     }
   }
+  
   clean = clean.replace(/[^0-9.]/g, '');
   const nominal = parseFloat(clean) * multiplier;
   if (isNaN(nominal) || nominal <= 0 || nominal > 10_000_000_000) return null;
@@ -269,10 +278,18 @@ async function handleTransaction(msg, sender, user, effectiveStatus, rawBody, bo
   if (KW_KELUAR.some(k => body.includes(k))) type = 'keluar';
   else if (KW_MASUK.some(k => body.includes(k))) type = 'masuk';
 
+  // Kumpulkan semua kandidat nominal, lalu pilih yang terbesar
+  const candidates = [];
   for (const word of rawBody.split(/\s+/)) {
     const val = parseCurrency(word);
-    if (val !== null && amount === null) amount = val;
+    if (val !== null) candidates.push({ val, word });
     else descWords.push(word);
+  }
+  
+  // Prioritas: (1) kata dengan prefix "Rp" atau ":", (2) nominal terbesar
+  if (candidates.length > 0) {
+    const withPrefix = candidates.find(c => /^(rp|:)/i.test(c.word));
+    amount = withPrefix ? withPrefix.val : Math.max(...candidates.map(c => c.val));
   }
 
   if (type && !amount) {
