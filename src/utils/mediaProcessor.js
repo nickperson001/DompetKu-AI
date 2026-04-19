@@ -2,68 +2,57 @@
 const { HfInference } = require('@huggingface/inference');
 const Tesseract = require('tesseract.js');
 const sharp = require('sharp');
-const fs = require('fs');
+const fs = require('fs/promises'); // Menggunakan promises
 const path = require('path');
+const crypto = require('crypto');
 
 const hf = new HfInference(process.env.HF_TOKEN);
-
-// FIX: tmpDir Railway-safe
 const tmpDir = '/tmp';
-if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 
 async function transcribeAudio(mediaObj) {
-    const fileName = `${Date.now()}_voice.ogg`;
+    // Gunakan UUID agar tidak tabrakan saat trafik tinggi
+    const fileName = `${crypto.randomUUID()}.ogg`;
     const filePath = path.join(tmpDir, fileName);
     
     try {
-        fs.writeFileSync(filePath, Buffer.from(mediaObj.data, 'base64'));
+        await fs.writeFile(filePath, Buffer.from(mediaObj.data, 'base64'));
 
+        const audioBuffer = await fs.readFile(filePath);
         const result = await hf.automaticSpeechRecognition({
             model: 'openai/whisper-large-v3',
-            data: fs.readFileSync(filePath),
+            data: audioBuffer,
             parameters: { language: 'id' }
         });
 
         return result.text ? result.text.trim() : '';
     } catch (err) {
-        console.error('[HF ERROR] Gagal transkrip audio:', err.message);
+        console.error('[MEDIA ERROR]', err.message);
         return '';
     } finally {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        try { await fs.unlink(filePath); } catch (e) {}
     }
 }
 
 async function extractTextFromImage(mediaObj) {
-    const fileName = `${Date.now()}_receipt.jpg`;
+    const fileName = `${crypto.randomUUID()}.jpg`;
     const filePath = path.join(tmpDir, fileName);
 
     try {
         const buffer = Buffer.from(mediaObj.data, 'base64');
-
         const processedBuffer = await sharp(buffer)
             .grayscale()
             .normalize()
-            .threshold(128)
-            .resize(2000, null, { withoutEnlargement: true })
             .toBuffer();
 
-        fs.writeFileSync(filePath, processedBuffer);
+        await fs.writeFile(filePath, processedBuffer);
 
-        const { data: { text } } = await Tesseract.recognize(
-            filePath,
-            'ind+eng',
-            { 
-                langPath: path.join(__dirname, '..', '..', 'tessdata'),
-                logger: () => {} 
-            }
-        );
-
+        const { data: { text } } = await Tesseract.recognize(filePath, 'ind+eng');
         return text ? text.trim() : '';
     } catch (err) {
-        console.error('[OCR ERROR] Gagal ekstrak text gambar:', err.message);
+        console.error('[OCR ERROR]', err.message);
         return '';
     } finally {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        try { await fs.unlink(filePath); } catch (e) {}
     }
 }
 
