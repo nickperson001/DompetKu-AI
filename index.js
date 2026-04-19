@@ -171,12 +171,12 @@ const client = new Client({
             '--mute-audio',
             '--safebrowsing-disable-auto-update',
         ],
-        executablePath: process.env.PUPPETEER_EXEC_PATH || undefined,
+        executablePath: process.env.PUPPETEER_EXEC_PATH || '/usr/bin/google-chrome-stable' || '/usr/bin/chromium-browser',
         timeout: 60000, // 60 detik timeout untuk startup Chromium
     },
     webVersionCache: {
-        type : 'local',
-        path : '/tmp/wa-version-cache', // Cache versi WA di /tmp
+        type : 'remote',
+        path : 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html', // Cache versi WA di /tmp
     },
     restartOnAuthFail: true,
     qrMaxRetries    : 5,     // Coba generate QR maksimal 5 kali
@@ -268,19 +268,29 @@ app.get('/login', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
+app.get('/ping', (req, res) => {
+    res.status(200).json({ ok: true, ts: Date.now() });
+});
+
 app.get('/health', async (req, res) => {
     const used = process.memoryUsage();
-    let dbStatus = 'error';
+    let dbStatus = 'unknown';
     try {
         const { error } = await supabase.from('users').select('id').limit(1);
         dbStatus = error ? 'error' : 'connected';
-    } catch (_) {}
+    } catch (_) {
+        dbStatus = 'error';
+    }
 
-    const health = {
-        status   : clientReady && dbStatus === 'connected' ? 'healthy' : 'degraded',
+    // ── Selalu 200 — Railway tidak boleh kill pod karena WA belum ready ──
+    res.status(200).json({
+        status   : 'running',   // Server selalu "running" jika bisa respond
+        bot      : botStatus,   // Online / Scan QR / Initializing / Disconnected
+        ready    : clientReady,
         timestamp: new Date().toISOString(),
         uptime   : Math.floor(process.uptime()),
-        whatsapp : { status: botStatus, ready: clientReady },
+        database : dbStatus,
+        session  : pgPool ? 'postgresql' : 'memory',
         system   : {
             memory: {
                 used      : Math.round(used.heapUsed / 1024 / 1024),
@@ -290,10 +300,7 @@ app.get('/health', async (req, res) => {
             cpu     : os.loadavg(),
             platform: os.platform(),
         },
-        database    : dbStatus,
-        session_type: pgPool ? 'postgresql' : 'memory',
-    };
-    res.status(health.status === 'healthy' ? 200 : 503).json(health);
+    });
 });
 
 // ════════════════════════════════════════════════════════════
@@ -518,14 +525,22 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// START SERVER
+// START SERVER (FIX: Health Check Priority)
 // ════════════════════════════════════════════════════════════
 server.listen(port, '0.0.0.0', () => {
     console.log(`\n🚀 DompetKu HQ v2.0 — port ${port}`);
     console.log(`   Dashboard : http://localhost:${port}/`);
     console.log(`   Login     : http://localhost:${port}/login`);
+    console.log(`   Ping      : http://localhost:${port}/ping`);
     console.log(`   Health    : http://localhost:${port}/health`);
     console.log(`   Session   : ${pgPool ? 'PostgreSQL' : 'Memory'}`);
     console.log(`   WA Dir    : ${WA_SESSION_DIR}\n`);
     addLog('info', `Server started — port ${port}`);
+
+    // Init WA SETELAH server listen agar /ping langsung bisa diakses Railway
+    console.log('[WA] Memulai inisialisasi WhatsApp...');
+    client.initialize().catch(e => {
+        addLog('error', `WA Initialize failed: ${e.message}`);
+        console.error('[WA] Initialize error:', e.message);
+    });
 });

@@ -6,7 +6,8 @@
   "deploy": {
     "startCommand": "node index.js",
     "restartPolicyType": "ON_FAILURE",
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 100
+    "restartPolicyMaxRetries": 3,
+    "healthcheckPath": "/ping",
+    "healthcheckTimeout": 300
   }
 }
