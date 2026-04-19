@@ -6,7 +6,7 @@ const { Server } = require('socket.io');
 const qrcodeWeb  = require('qrcode');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const session    = require('express-session');
-const { Pool }   = require('pg');          // FIX #4: hapus duplicate require
+const { Pool }   = require('pg');
 const pgSession  = require('connect-pg-simple')(session);
 const os         = require('os');
 const path       = require('path');
@@ -19,33 +19,37 @@ const supabase           = require('./src/config/supabase');
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server);
-const port   = process.env.PORT;
+const port   = process.env.PORT || 3000;
 
 // ════════════════════════════════════════════════════════════
-// SESSION STORE (PostgreSQL — anti-logout saat redeploy)
+// SESSION STORE (PostgreSQL dengan fallback ke memory)
 // ════════════════════════════════════════════════════════════
-const pgPool = new Pool({
-    connectionString: process.env.DATABASE_URL, // Pastikan ini sudah pakai URL Port 6543
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
+let pgPool = null;
+if (process.env.DATABASE_URL) {
+    try {
+        pgPool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        });
+        console.log('[SESSION] PostgreSQL pool created');
+    } catch (err) {
+        console.error('[SESSION] Failed to create pool:', err.message);
+    }
+}
 
-// FIX #3: Session middleware dengan fallback ke memory store
-// Jika DATABASE_URL tidak diset atau pg gagal konek → pakai memory store
-// Memory store cukup untuk satu instance Railway (session hilang saat redeploy, tapi login tetap jalan)
 function buildSessionMiddleware() {
     const base = {
         secret           : process.env.SESSION_SECRET || 'dompetku-secret-ganti-ini-32char!!',
         resave           : false,
         saveUninitialized: false,
         cookie: {
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-            maxAge: 30 * 24 * 60 * 60 * 1000,
+            secure  : process.env.NODE_ENV === 'production',
+            maxAge  : 30 * 24 * 60 * 60 * 1000,
             httpOnly: true,
-        }
+        },
     };
 
-    if (!process.env.DATABASE_URL) {
+    if (!pgPool) {
         console.warn('[SESSION] ⚠️  DATABASE_URL tidak diset — pakai memory store (session hilang saat restart)');
         return session(base);
     }
@@ -55,12 +59,7 @@ function buildSessionMiddleware() {
             pool                : pgPool,
             tableName           : 'user_sessions',
             createTableIfMissing: true,
-            errorLog            : (err) => console.error('[SESSION] pg store error:', err.message),
-        });
-
-        // Tangkap error koneksi awal agar tidak crash server
-        store.on && store.on('error', (err) => {
-            console.error('[SESSION] Store error (non-fatal):', err.message);
+            errorLog            : (err) => console.error('[SESSION] Store error:', err.message),
         });
 
         console.log('[SESSION] ✅ PostgreSQL session store aktif');
@@ -73,18 +72,12 @@ function buildSessionMiddleware() {
 
 const sessionMiddleware = buildSessionMiddleware();
 
-app.set('trust proxy', 1);
 app.use(sessionMiddleware);
 app.use(express.json());
-
-// FIX #7: Serve static HANYA untuk asset (css/js/img), bukan HTML
-// HTML pages dilayani lewat route eksplisit agar auth bisa dikontrol
 app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
-// Socket.io client
-app.use('/socket.io', express.static(path.join(__dirname, 'node_modules', 'socket.io', 'client-dist')));
 
 // ════════════════════════════════════════════════════════════
-// WA SESSION PERSISTENCE (Supabase)
+// WA SESSION PERSISTENCE
 // ════════════════════════════════════════════════════════════
 async function saveSessionToDB(sessionData) {
     try {
@@ -93,9 +86,11 @@ async function saveSessionToDB(sessionData) {
             data      : JSON.stringify(sessionData),
             updated_at: new Date().toISOString(),
         });
-        if (error) console.error('[SESSION] Save error:', error.message);
-        else console.log('[SESSION] ✅ Saved to DB');
-    } catch (e) { console.error('[SESSION] Save failed:', e.message); }
+        if (error) console.error('[WA-SESSION] Save error:', error.message);
+        else console.log('[WA-SESSION] ✅ Saved to DB');
+    } catch (e) { 
+        console.error('[WA-SESSION] Save failed:', e.message); 
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -123,13 +118,16 @@ const addLog = (level, message, data = {}) => {
 // WHATSAPP CLIENT
 // ════════════════════════════════════════════════════════════
 const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+    authStrategy: new LocalAuth({ dataPath: '/tmp/wa-session' }),
     puppeteer: {
         headless: true,
         args: [
-            '--no-sandbox', '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', '--single-process',
-            '--no-zygote', '--disable-gpu',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--single-process',
+            '--no-zygote',
+            '--disable-gpu',
         ],
         executablePath: process.env.PUPPETEER_EXEC_PATH || undefined,
     },
@@ -194,27 +192,22 @@ client.initialize().catch(e => addLog('error', `Initialize failed: ${e.message}`
 
 // ════════════════════════════════════════════════════════════
 // AUTH MIDDLEWARE
-// FIX #1: Browser request → redirect ke /login, bukan JSON 401
 // ════════════════════════════════════════════════════════════
 const isAdmin = (req, res, next) => {
     if (req.session && req.session.authenticated) return next();
-    // Cek apakah request dari browser atau API
     const wantsJSON = req.xhr || req.headers['accept']?.includes('application/json') || req.path.startsWith('/api/');
     if (wantsJSON) return res.status(401).json({ error: 'Unauthorized' });
-    return res.redirect('/login');          // Browser → redirect ke halaman login
+    return res.redirect('/login');
 };
 
 // ════════════════════════════════════════════════════════════
-// ROUTES — PUBLIC (tanpa auth)
+// PUBLIC ROUTES
 // ════════════════════════════════════════════════════════════
-
-// FIX #2: Tambah route eksplisit untuk halaman login
 app.get('/login', (req, res) => {
     if (req.session && req.session.authenticated) return res.redirect('/');
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// Health check (tidak butuh auth — untuk Railway healthcheck)
 app.get('/health', async (req, res) => {
     const used = process.memoryUsage();
     let dbStatus = 'error';
@@ -247,22 +240,14 @@ app.get('/health', async (req, res) => {
 // ════════════════════════════════════════════════════════════
 app.post('/admin/login', (req, res) => {
     const { username, password } = req.body;
-    const validUser = (process.env.ADMIN_USERNAME || 'admin').trim();
-    const validPass = (process.env.ADMIN_PASSWORD || 'admin123').trim();
+    const validUser = process.env.ADMIN_USERNAME || 'admin';
+    const validPass = process.env.ADMIN_PASSWORD || 'admin123';
 
-    if (username?.trim() === validUser && password?.trim() === validPass) {
+    if (username === validUser && password === validPass) {
         req.session.authenticated = true;
         req.session.loginAt = new Date().toISOString();
-
-        return req.session.save((err) => {
-            if (err) {
-                addLog('error', `Session save failed: ${err.message}`);
-                return res.status(500).json({ success: false, error: 'Session save failed' });
-            }
-
-            addLog('info', `Admin login from ${req.ip}`);
-            res.json({ success: true });
-        });
+        addLog('info', `Admin login from ${req.ip}`);
+        res.json({ success: true });
     } else {
         addLog('warn', `Failed login: ${username} from ${req.ip}`);
         res.status(401).json({ success: false });
@@ -274,13 +259,12 @@ app.post('/admin/logout', (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// ROUTES — PROTECTED (butuh auth)
+// PROTECTED ROUTES
 // ════════════════════════════════════════════════════════════
 app.get('/', isAdmin, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Users list dengan pagination + search + filter
 app.get('/api/admin/users', isAdmin, async (req, res) => {
     try {
         const page   = Math.max(1, parseInt(req.query.page)  || 1);
@@ -297,13 +281,18 @@ app.get('/api/admin/users', isAdmin, async (req, res) => {
             .range((page - 1) * limit, page * limit - 1);
 
         if (error) throw error;
-        res.json({ users: data || [], pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) } });
+        res.json({ 
+            users: data || [], 
+            pagination: { 
+                page, limit, total: count || 0, 
+                totalPages: Math.ceil((count || 0) / limit) 
+            } 
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Update status user
 app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
     const { id }     = req.params;
     const { status } = req.body;
@@ -331,7 +320,6 @@ app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
         const { error } = await supabase.from('users').update(updates).eq('id', id);
         if (error) throw error;
 
-        // Kirim notif WA jika bot online
         if (clientReady) {
             const msgs = {
                 demo     : 'ℹ️ Status akun Anda diubah ke DEMO (5 transaksi/hari).',
@@ -349,7 +337,6 @@ app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
     }
 });
 
-// Toggle maintenance
 app.post('/api/admin/maintenance', isAdmin, async (req, res) => {
     const { enabled } = req.body;
     try {
@@ -364,7 +351,6 @@ app.post('/api/admin/maintenance', isAdmin, async (req, res) => {
     }
 });
 
-// Broadcast
 app.post('/api/admin/broadcast', isAdmin, async (req, res) => {
     const { message, target } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: 'Message required' });
@@ -380,7 +366,6 @@ app.post('/api/admin/broadcast', isAdmin, async (req, res) => {
         const job = { id: jobId, total: users.length, sent: 0, failed: 0, status: 'running', target: target || 'all' };
         activeBroadcasts.set(jobId, job);
 
-        // Proses async — response langsung
         processBroadcast(jobId, users, message);
 
         addLog('info', `Broadcast started → ${users.length} users [${target}]`);
@@ -408,7 +393,10 @@ async function processBroadcast(jobId, users, message) {
 
         if (i % 5 === 0 || i === users.length - 1) {
             job.progress = Math.round(((i + 1) / users.length) * 100);
-            io.emit('broadcast_progress', { jobId, current: i + 1, total: users.length, sent: job.sent, failed: job.failed });
+            io.emit('broadcast_progress', { 
+                jobId, current: i + 1, total: users.length, 
+                sent: job.sent, failed: job.failed 
+            });
         }
         await new Promise(r => setTimeout(r, 1200));
     }
@@ -418,20 +406,22 @@ async function processBroadcast(jobId, users, message) {
     addLog('info', `Broadcast done: ${job.sent} sent, ${job.failed} failed`);
 }
 
-// System logs
 app.get('/api/admin/logs', isAdmin, (req, res) => {
     const limit = Math.min(500, parseInt(req.query.limit) || 100);
     res.json(systemLogs.slice(0, limit));
 });
 
-// Bot status (untuk dashboard realtime)
 app.get('/api/admin/status', isAdmin, (req, res) => {
-    res.json({ status: botStatus, ready: clientReady, qr: currentQR, maintenance: maintenanceMode });
+    res.json({ 
+        status: botStatus, 
+        ready: clientReady, 
+        qr: currentQR, 
+        maintenance: maintenanceMode 
+    });
 });
 
 // ════════════════════════════════════════════════════════════
 // SOCKET.IO
-// FIX #3: Gunakan sessionMiddleware yang SAMA dengan express
 // ════════════════════════════════════════════════════════════
 io.use((socket, next) => {
     sessionMiddleware(socket.request, socket.request.res || {}, next);
@@ -439,8 +429,6 @@ io.use((socket, next) => {
 
 io.use((socket, next) => {
     if (socket.request.session?.authenticated) return next();
-    // Jangan block socket — kirim state awal tapi tandai belum auth
-    // Dashboard butuh QR bahkan sebelum login
     next();
 });
 
@@ -448,7 +436,6 @@ io.on('connection', (socket) => {
     const isAuth = socket.request.session?.authenticated;
     addLog('info', `Client connected: ${socket.id} [${isAuth ? 'admin' : 'guest'}]`);
 
-    // Kirim state awal — QR harus tampil meski belum login
     socket.emit('bot_update', { status: botStatus, qr: currentQR, ready: clientReady });
 
     if (isAuth) {
@@ -468,7 +455,7 @@ io.on('connection', (socket) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// GLOBAL ERROR HANDLERS
+// ERROR HANDLERS
 // ════════════════════════════════════════════════════════════
 process.on('uncaughtException', (err) => {
     console.error(`[FATAL] uncaughtException: ${err.message}\n${err.stack}`);

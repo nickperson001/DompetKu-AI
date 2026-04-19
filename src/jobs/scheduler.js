@@ -1,7 +1,94 @@
 'use strict';
 
 const cron     = require('node-cron');
+const os       = require('os');
 const supabase = require('../config/supabase');
+const stockManager = require('../utils/stockManager');
+
+// ════════════════════════════════════════════════════════════
+// MUTEX LOCK SYSTEM (FIX LOOP BUG #2)
+// Prevent cron job double execution
+// ════════════════════════════════════════════════════════════
+const INSTANCE_ID = `${os.hostname()}-${process.pid}-${Date.now()}`;
+const activeLocks = new Set();
+
+async function acquireLock(jobName, durationMinutes = 5) {
+    const lockKey = `lock:${jobName}`;
+    
+    // Check memory lock first (fast path)
+    if (activeLocks.has(lockKey)) {
+        console.log(`[LOCK] ${jobName} already locked in memory`);
+        return false;
+    }
+    
+    try {
+        const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
+        
+        // Try to acquire DB lock
+        const { data, error } = await supabase
+            .from('scheduler_locks')
+            .upsert({
+                job_name  : jobName,
+                locked_at : new Date().toISOString(),
+                locked_by : INSTANCE_ID,
+                expires_at: expiresAt.toISOString(),
+            }, {
+                onConflict: 'job_name',
+                ignoreDuplicates: false,
+            })
+            .select()
+            .single();
+        
+        if (error) {
+            // Lock exists and not expired
+            console.log(`[LOCK] ${jobName} locked by another instance`);
+            return false;
+        }
+        
+        // Check if we got the lock (not expired and owned by us)
+        if (data && data.locked_by === INSTANCE_ID) {
+            activeLocks.add(lockKey);
+            console.log(`[LOCK] ✅ ${jobName} acquired by ${INSTANCE_ID}`);
+            return true;
+        }
+        
+        return false;
+    } catch (err) {
+        console.error(`[LOCK] Error acquiring ${jobName}:`, err.message);
+        return false;
+    }
+}
+
+async function releaseLock(jobName) {
+    const lockKey = `lock:${jobName}`;
+    activeLocks.delete(lockKey);
+    
+    try {
+        await supabase
+            .from('scheduler_locks')
+            .delete()
+            .eq('job_name', jobName)
+            .eq('locked_by', INSTANCE_ID);
+        
+        console.log(`[LOCK] ✅ ${jobName} released`);
+    } catch (err) {
+        console.error(`[LOCK] Error releasing ${jobName}:`, err.message);
+    }
+}
+
+// Wrapper untuk execute job dengan lock
+async function executeWithLock(jobName, fn, durationMinutes = 5) {
+    const acquired = await acquireLock(jobName, durationMinutes);
+    if (!acquired) return;
+    
+    try {
+        await fn();
+    } catch (err) {
+        console.error(`[JOB] ${jobName} error:`, err.message);
+    } finally {
+        await releaseLock(jobName);
+    }
+}
 
 // ════════════════════════════════════════════════════════════
 // HELPERS
@@ -16,12 +103,10 @@ function formatPhone(sender) {
     return '+' + n;
 }
 
-/** Jeda non-blocking agar tidak flood WA */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ════════════════════════════════════════════════════════════
 // KIRIM LAPORAN
-// Return: true jika ada data & berhasil dikirim, false jika tidak.
 // ════════════════════════════════════════════════════════════
 async function sendReport(client, userId, storeName, periodStr, timeFilterIso) {
     try {
@@ -75,6 +160,7 @@ async function sendUpgradeNotification(client, userId, storeName, status, expire
                 `✅ Yang Anda dapatkan:\n` +
                 `   • Transaksi tanpa batas per hari\n` +
                 `   • Semua laporan otomatis\n` +
+                `   • Stock opname enterprise unlimited\n` +
                 `   • Tidak perlu perpanjang lagi\n\n` +
                 `Terima kasih telah mempercayai kami! 🙏`;
         } else {
@@ -87,7 +173,8 @@ async function sendUpgradeNotification(client, userId, storeName, status, expire
                 `Akun kini *PRO* ⭐ aktif hingga *${exp}*!\n\n` +
                 `✅ Yang Anda dapatkan:\n` +
                 `   • Transaksi tanpa batas per hari\n` +
-                `   • Laporan mingguan & bulanan otomatis\n\n` +
+                `   • Laporan mingguan & bulanan otomatis\n` +
+                `   • Stock opname lengkap\n\n` +
                 `Ketik *Paket* untuk perpanjang kapan saja.\n` +
                 `Terima kasih telah mempercayai kami! 🙏`;
         }
@@ -102,7 +189,6 @@ async function sendUpgradeNotification(client, userId, storeName, status, expire
 
 // ════════════════════════════════════════════════════════════
 // POLLING: CEK USER BARU UPGRADE (fallback realtime)
-// Berjalan tiap 1 menit. upgrade_notified=false mencegah dobel kirim.
 // ════════════════════════════════════════════════════════════
 async function checkAndNotifyUpgrades(client) {
     try {
@@ -133,7 +219,6 @@ async function checkAndNotifyUpgrades(client) {
 
 // ════════════════════════════════════════════════════════════
 // CRON: DOWNGRADE PRO YANG SUDAH EXPIRED
-// Berjalan setiap hari jam 00:05. Pro expired → kembali ke demo.
 // ════════════════════════════════════════════════════════════
 async function checkExpiredSubscriptions(client) {
     try {
@@ -169,12 +254,22 @@ async function checkExpiredSubscriptions(client) {
 }
 
 // ════════════════════════════════════════════════════════════
-// BROADCAST KE USER
-// target: 'all' | 'demo' | 'pro' | 'unlimited'
-// {nama_toko} diganti otomatis per-user.
+// BROADCAST KE USER (FIX LOOP BUG #3)
 // ════════════════════════════════════════════════════════════
+const broadcastHistory = new Map(); // In-memory dedup
+
 async function broadcastMessage(client, message, target = 'all') {
     try {
+        // Dedup check: hash message + target
+        const hash = `${message.substring(0, 50)}-${target}`;
+        const lastSent = broadcastHistory.get(hash);
+        
+        // Jangan kirim broadcast yang sama dalam 10 menit
+        if (lastSent && Date.now() - lastSent < 10 * 60 * 1000) {
+            console.log(`[BROADCAST] Duplicate detected within 10min — skip`);
+            return { sent: 0, failed: 0, total: 0, skipped: true };
+        }
+        
         let query = supabase.from('users').select('id, store_name');
         if (target !== 'all') query = query.eq('status', target);
 
@@ -191,7 +286,16 @@ async function broadcastMessage(client, message, target = 'all') {
             } catch (_) {
                 failed++;
             }
-            await sleep(600); // jeda 600ms — aman dari ban WA
+            await sleep(1200); // 1.2 detik — aman dari ban WA
+        }
+
+        // Mark as sent
+        broadcastHistory.set(hash, Date.now());
+        
+        // Cleanup old history (keep last 100 only)
+        if (broadcastHistory.size > 100) {
+            const oldest = Array.from(broadcastHistory.keys()).slice(0, 50);
+            oldest.forEach(k => broadcastHistory.delete(k));
         }
 
         console.log(`[BROADCAST] Selesai: ${sent} OK, ${failed} gagal, total ${users.length}`);
@@ -204,8 +308,6 @@ async function broadcastMessage(client, message, target = 'all') {
 
 // ════════════════════════════════════════════════════════════
 // POLLING: PROSES BROADCAST_PENDING DARI ADMIN PANEL
-// Admin panel menyimpan request ke settings.broadcast_pending.
-// Scheduler ini yang mengeksekusi agar WA client ada di sini.
 // ════════════════════════════════════════════════════════════
 async function processBroadcastPending(client) {
     try {
@@ -231,6 +333,12 @@ async function processBroadcastPending(client) {
         await supabase.from('settings').update({ value: 'null' }).eq('key', 'broadcast_pending');
 
         const result = await broadcastMessage(client, req.message, req.target || 'all');
+        
+        if (result.skipped) {
+            console.log(`[BROADCAST] Skipped duplicate`);
+            return;
+        }
+        
         console.log(`[BROADCAST] Hasil: ${JSON.stringify(result)}`);
 
         // Simpan hasil broadcast ke settings
@@ -242,10 +350,8 @@ async function processBroadcastPending(client) {
     }
 }
 
-
 // ════════════════════════════════════════════════════════════
 // SAPAAN PAGI — Setiap hari jam 09:00
-// Kirim ke semua user yang terdaftar sebagai semangat memulai hari
 // ════════════════════════════════════════════════════════════
 async function sendMorningGreeting(client) {
     console.log('[CRON] Sapaan Pagi...');
@@ -257,7 +363,6 @@ async function sendMorningGreeting(client) {
         if (error) throw new Error(error.message);
         if (!users || users.length === 0) return;
 
-        // Variasi pesan pagi agar tidak monoton
         const greetings = [
             (name) =>
                 `🌅 *Selamat pagi Bos ${name}!*\n\n` +
@@ -287,8 +392,7 @@ async function sendMorningGreeting(client) {
         let sent = 0;
         for (const u of users) {
             try {
-                // Pilih variasi pesan berdasarkan hari agar berbeda tiap hari
-                const dayOfWeek = new Date().getDay(); // 0-6
+                const dayOfWeek = new Date().getDay();
                 const greetFn   = greetings[dayOfWeek % greetings.length];
                 await client.sendMessage(u.id, greetFn(u.store_name));
                 sent++;
@@ -304,7 +408,6 @@ async function sendMorningGreeting(client) {
 
 // ════════════════════════════════════════════════════════════
 // PENGINGAT SORE — Setiap hari jam 18:00
-// Hanya kirim ke user yang BELUM ADA transaksi hari ini
 // ════════════════════════════════════════════════════════════
 async function sendEveningReminder(client) {
     console.log('[CRON] Pengingat Sore...');
@@ -324,7 +427,6 @@ async function sendEveningReminder(client) {
 
         for (const u of users) {
             try {
-                // Cek apakah user sudah ada transaksi hari ini
                 const { count, error: cntErr } = await supabase
                     .from('transactions')
                     .select('*', { count: 'exact', head: true })
@@ -332,11 +434,8 @@ async function sendEveningReminder(client) {
                     .gte('created_at', todayStart.toISOString());
 
                 if (cntErr) { skipped++; continue; }
-
-                // Sudah ada transaksi → skip, tidak perlu diingatkan
                 if ((count ?? 0) > 0) { skipped++; continue; }
 
-                // Belum ada transaksi → kirim pengingat
                 await client.sendMessage(u.id,
                     `🌆 *Halo Bos ${u.store_name}!*\n\n` +
                     `Kami lihat hari ini belum ada transaksi yang tercatat. 📭\n\n` +
@@ -352,84 +451,205 @@ async function sendEveningReminder(client) {
             await sleep(600);
         }
 
-        console.log(`[CRON] Pengingat Sore: ${reminded} diingatkan, ${skipped} dilewati (sudah transaksi/error).`);
+        console.log(`[CRON] Pengingat Sore: ${reminded} diingatkan, ${skipped} dilewati.`);
     } catch (err) {
         console.error(`[CRON] Pengingat Sore error: ${err.message}`);
     }
 }
 
 // ════════════════════════════════════════════════════════════
-// INISIALISASI SEMUA CRON JOBS
+// STOCK ALERT CHECKER — Kirim notif stock rendah/habis
+// ════════════════════════════════════════════════════════════
+async function checkStockAlerts(client) {
+    console.log('[CRON] Stock Alert Checker...');
+    try {
+        const result = await stockManager.getPendingAlerts(null);
+        
+        // Group by user
+        const byUser = {};
+        (result.alerts || []).forEach(alert => {
+            if (!byUser[alert.user_id]) byUser[alert.user_id] = [];
+            byUser[alert.user_id].push(alert);
+        });
+        
+        let sent = 0;
+        for (const [userId, alerts] of Object.entries(byUser)) {
+            try {
+                // Get user info
+                const { data: user } = await supabase
+                    .from('users')
+                    .select('store_name, status')
+                    .eq('id', userId)
+                    .single();
+                
+                if (!user || !['pro', 'unlimited'].includes(user.status)) continue;
+                
+                let msg = `⚠️ *Stock Alert - ${user.store_name}*\n\n`;
+                
+                alerts.forEach(a => {
+                    const p = a.products;
+                    const stock = stockManager.formatQty(p.stock_current, p.unit);
+                    const min = stockManager.formatQty(p.stock_min, p.unit);
+                    
+                    if (a.alert_type === 'out_of_stock') {
+                        msg += `🔴 *${p.name}* (${p.sku})\n`;
+                        msg += `   Stock HABIS!\n\n`;
+                    } else {
+                        msg += `⚠️ *${p.name}* (${p.sku})\n`;
+                        msg += `   Stock: ${stock} ${p.unit} (min: ${min})\n\n`;
+                    }
+                });
+                
+                msg += `Ketik *Stock list* untuk lihat semua produk.`;
+                
+                await client.sendMessage(userId, msg);
+                sent++;
+            } catch (e) {
+                console.error(`[STOCK] Alert send error ${userId}:`, e.message);
+            }
+            await sleep(800);
+        }
+        
+        console.log(`[CRON] Stock alerts sent: ${sent}`);
+    } catch (err) {
+        console.error(`[CRON] Stock alert error: ${err.message}`);
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// CLEANUP JOBS — Hapus data lama untuk menjaga DB tetap ringan
+// ════════════════════════════════════════════════════════════
+async function cleanupOldData() {
+    console.log('[CRON] Cleanup old data...');
+    try {
+        // Cleanup message_processed older than 24h
+        const { error: msgErr } = await supabase
+            .rpc('cleanup_processed_messages');
+        if (msgErr) console.error('[CLEANUP] message_processed error:', msgErr.message);
+        
+        // Cleanup expired locks
+        const { error: lockErr } = await supabase
+            .rpc('cleanup_expired_locks');
+        if (lockErr) console.error('[CLEANUP] locks error:', lockErr.message);
+        
+        console.log('[CRON] Cleanup done.');
+    } catch (err) {
+        console.error(`[CRON] Cleanup error: ${err.message}`);
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// INISIALISASI SEMUA CRON JOBS (WITH MUTEX LOCK)
 // ════════════════════════════════════════════════════════════
 function initSchedulers(client) {
     const tz = { timezone: 'Asia/Jakarta' };
 
-    // Laporan harian — 22:00 semua user
-    cron.schedule('0 22 * * *', async () => {
-        console.log('[CRON] Laporan Harian...');
-        try {
-            const today = new Date(); today.setHours(0, 0, 0, 0);
-            const { data: users } = await supabase.from('users').select('id, store_name');
-            if (!users) return;
-            let ok = 0;
-            for (const u of users) {
-                if (await sendReport(client, u.id, u.store_name, 'Harian', today.toISOString())) ok++;
-                await sleep(300);
-            }
-            console.log(`[CRON] Harian selesai: ${ok}/${users.length}`);
-        } catch (e) { console.error(`[CRON] Harian: ${e.message}`); }
+    // Laporan harian — 22:00 semua user (WITH LOCK)
+    cron.schedule('0 22 * * *', () => {
+        executeWithLock('daily-report', async () => {
+            console.log('[CRON] Laporan Harian...');
+            try {
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                const { data: users } = await supabase.from('users').select('id, store_name');
+                if (!users) return;
+                let ok = 0;
+                for (const u of users) {
+                    if (await sendReport(client, u.id, u.store_name, 'Harian', today.toISOString())) ok++;
+                    await sleep(300);
+                }
+                console.log(`[CRON] Harian selesai: ${ok}/${users.length}`);
+            } catch (e) { console.error(`[CRON] Harian: ${e.message}`); }
+        }, 60); // 60 min lock
     }, tz);
 
     // Laporan mingguan — Minggu 21:00 khusus pro & unlimited
-    cron.schedule('0 21 * * 0', async () => {
-        console.log('[CRON] Laporan Mingguan...');
-        try {
-            const lw = new Date(); lw.setDate(lw.getDate() - 7); lw.setHours(0, 0, 0, 0);
-            const { data: users } = await supabase.from('users').select('id, store_name')
-                .in('status', ['pro', 'unlimited']);
-            if (!users) return;
-            let ok = 0;
-            for (const u of users) {
-                if (await sendReport(client, u.id, u.store_name, 'Mingguan', lw.toISOString())) ok++;
-                await sleep(300);
-            }
-            console.log(`[CRON] Mingguan selesai: ${ok}/${users.length}`);
-        } catch (e) { console.error(`[CRON] Mingguan: ${e.message}`); }
+    cron.schedule('0 21 * * 0', () => {
+        executeWithLock('weekly-report', async () => {
+            console.log('[CRON] Laporan Mingguan...');
+            try {
+                const lw = new Date(); lw.setDate(lw.getDate() - 7); lw.setHours(0, 0, 0, 0);
+                const { data: users } = await supabase.from('users').select('id, store_name')
+                    .in('status', ['pro', 'unlimited']);
+                if (!users) return;
+                let ok = 0;
+                for (const u of users) {
+                    if (await sendReport(client, u.id, u.store_name, 'Mingguan', lw.toISOString())) ok++;
+                    await sleep(300);
+                }
+                console.log(`[CRON] Mingguan selesai: ${ok}/${users.length}`);
+            } catch (e) { console.error(`[CRON] Mingguan: ${e.message}`); }
+        }, 60);
     }, tz);
 
     // Laporan bulanan — Tgl 1 jam 21:00 khusus pro & unlimited
-    cron.schedule('0 21 1 * *', async () => {
-        console.log('[CRON] Laporan Bulanan...');
-        try {
-            const lm = new Date(); lm.setMonth(lm.getMonth() - 1); lm.setDate(1); lm.setHours(0, 0, 0, 0);
-            const { data: users } = await supabase.from('users').select('id, store_name')
-                .in('status', ['pro', 'unlimited']);
-            if (!users) return;
-            let ok = 0;
-            for (const u of users) {
-                if (await sendReport(client, u.id, u.store_name, 'Bulanan', lm.toISOString())) ok++;
-                await sleep(300);
-            }
-            console.log(`[CRON] Bulanan selesai: ${ok}/${users.length}`);
-        } catch (e) { console.error(`[CRON] Bulanan: ${e.message}`); }
+    cron.schedule('0 21 1 * *', () => {
+        executeWithLock('monthly-report', async () => {
+            console.log('[CRON] Laporan Bulanan...');
+            try {
+                const lm = new Date(); lm.setMonth(lm.getMonth() - 1); lm.setDate(1); lm.setHours(0, 0, 0, 0);
+                const { data: users } = await supabase.from('users').select('id, store_name')
+                    .in('status', ['pro', 'unlimited']);
+                if (!users) return;
+                let ok = 0;
+                for (const u of users) {
+                    if (await sendReport(client, u.id, u.store_name, 'Bulanan', lm.toISOString())) ok++;
+                    await sleep(300);
+                }
+                console.log(`[CRON] Bulanan selesai: ${ok}/${users.length}`);
+            } catch (e) { console.error(`[CRON] Bulanan: ${e.message}`); }
+        }, 60);
     }, tz);
 
     // Cek expired pro — tiap hari jam 00:05
-    cron.schedule('5 0 * * *', () => checkExpiredSubscriptions(client), tz);
+    cron.schedule('5 0 * * *', () => {
+        executeWithLock('check-expired', async () => {
+            await checkExpiredSubscriptions(client);
+        }, 10);
+    }, tz);
 
-    // Notifikasi upgrade — tiap 1 menit (fallback realtime)
+    // Notifikasi upgrade — tiap 1 menit (fallback realtime) - NO LOCK (fast)
     cron.schedule('* * * * *', () => checkAndNotifyUpgrades(client));
 
-    // Broadcast pending — tiap 2 menit
-    cron.schedule('*/2 * * * *', () => processBroadcastPending(client));
+    // Broadcast pending — tiap 2 menit (WITH LOCK)
+    cron.schedule('*/2 * * * *', () => {
+        executeWithLock('broadcast', async () => {
+            await processBroadcastPending(client);
+        }, 5);
+    });
 
     // Sapaan pagi — tiap hari jam 09:00
-    cron.schedule('0 9 * * *', () => sendMorningGreeting(client), tz);
+    cron.schedule('0 9 * * *', () => {
+        executeWithLock('morning-greeting', async () => {
+            await sendMorningGreeting(client);
+        }, 60);
+    }, tz);
 
-    // Pengingat sore — tiap hari jam 18:00, hanya user tanpa transaksi hari ini
-    cron.schedule('0 18 * * *', () => sendEveningReminder(client), tz);
+    // Pengingat sore — tiap hari jam 18:00
+    cron.schedule('0 18 * * *', () => {
+        executeWithLock('evening-reminder', async () => {
+            await sendEveningReminder(client);
+        }, 60);
+    }, tz);
 
-    console.log('[SISTEM] ✅ Scheduler aktif: Harian | Mingguan | Bulanan | Expiry | Upgrade | Broadcast | Sapaan Pagi | Pengingat Sore');
+    // Stock alert — tiap 6 jam (00:00, 06:00, 12:00, 18:00)
+    cron.schedule('0 */6 * * *', () => {
+        executeWithLock('stock-alerts', async () => {
+            await checkStockAlerts(client);
+        }, 30);
+    }, tz);
+
+    // Cleanup old data — tiap hari jam 03:00
+    cron.schedule('0 3 * * *', () => {
+        executeWithLock('cleanup', async () => {
+            await cleanupOldData();
+        }, 10);
+    }, tz);
+
+    console.log('[SISTEM] ✅ Scheduler aktif dengan mutex lock:');
+    console.log('  - Harian (22:00) | Mingguan (Minggu 21:00) | Bulanan (tgl 1, 21:00)');
+    console.log('  - Expiry check (00:05) | Upgrade notif (tiap 1 min)');
+    console.log('  - Broadcast (tiap 2 min) | Sapaan pagi (09:00) | Pengingat sore (18:00)');
+    console.log('  - Stock alerts (tiap 6 jam) | Cleanup (03:00)');
 }
 
 module.exports = { initSchedulers, sendReport, sendUpgradeNotification, broadcastMessage };

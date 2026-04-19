@@ -1,7 +1,7 @@
 {
-  "name": "wa-finance-bot",
-  "version": "1.0.0",
-  "description": "Bot Finance UMKM dengan Supabase",
+  "name": "dompetku-finance-bot",
+  "version": "2.0.0",
+  "description": "WhatsApp Finance Bot with Stock Opname System",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -23,6 +23,12 @@
     "socket.io": "^4.8.3",
     "tesseract.js": "^7.0.0",
     "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "author": "",
   "license": "ISC"

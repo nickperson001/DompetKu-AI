@@ -1,18 +1,9 @@
-# Dependency
 node_modules/
-npm-debug.log*
-
-# Environment Variables (SANGAT PENTING: Jangan biarkan API Key bocor)
 .env
-
-# WhatsApp Session (Sesi login WA Mas tidak boleh di-upload)
+/tmp/
 .wwebjs_auth/
 .wwebjs_cache/
-
-# Operating System
-.DS_Store
-Thumbs.db
-
-# Logs
-logs/
+npm-debug.log
+yarn-error.log
 *.log
+.DS_Store
