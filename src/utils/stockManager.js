@@ -21,12 +21,14 @@ function formatRupiah(amount) {
 // PRODUCT MANAGEMENT
 // ════════════════════════════════════════════════════════════
 
+/**
+ * Tambah produk baru
+ * @returns {object} { success, product, error }
+ */
 async function addProduct(userId, data) {
-    const {
-        sku, name, category, unit,
-        priceBuy, priceSell, stockInitial, stockMin, description,
-    } = data;
+    const { sku, name, category, unit, priceBuy, priceSell, stockInitial, stockMin, description } = data;
 
+    // Validasi
     if (!sku || !name) {
         return { success: false, error: 'SKU dan nama produk wajib diisi.' };
     }
@@ -38,10 +40,10 @@ async function addProduct(userId, data) {
             .select('id')
             .eq('user_id', userId)
             .eq('sku', sku.toUpperCase())
-            .maybeSingle();
+            .single();
 
         if (existing) {
-            return { success: false, error: `SKU "${sku.toUpperCase()}" sudah digunakan. Gunakan SKU lain.` };
+            return { success: false, error: `SKU "${sku}" sudah digunakan. Gunakan SKU lain.` };
         }
 
         const { data: product, error } = await supabase
@@ -63,15 +65,15 @@ async function addProduct(userId, data) {
 
         if (error) throw error;
 
-        // ── Log initial stock via RPC jika > 0 ──────────────────
-        if (parseFloat(stockInitial) > 0) {
-            await supabase.rpc('adjust_stock_atomic', {
-                p_product_id    : product.id,
-                p_user_id       : userId,
-                p_type          : 'adjustment',
-                p_quantity      : parseFloat(stockInitial),
-                p_reference_type: 'initial',
-                p_note          : 'Stock awal saat produk ditambahkan',
+        // Log initial stock jika > 0
+        if (stockInitial > 0) {
+            await logStockMovement(userId, product.id, {
+                type         : 'in',
+                quantity     : stockInitial,
+                stockBefore  : 0,
+                stockAfter   : stockInitial,
+                referenceType: 'initial',
+                note         : 'Stock awal saat produk ditambahkan',
             });
         }
 
@@ -82,12 +84,12 @@ async function addProduct(userId, data) {
     }
 }
 
+/**
+ * Update produk (harga, nama, dll — BUKAN stock)
+ */
 async function updateProduct(userId, productId, updates) {
     try {
-        const allowed = [
-            'name', 'category', 'unit', 'price_buy',
-            'price_sell', 'stock_min', 'description', 'is_active',
-        ];
+        const allowed = ['name', 'category', 'unit', 'price_buy', 'price_sell', 'stock_min', 'description', 'is_active'];
         const payload = {};
         Object.keys(updates).forEach(k => {
             if (allowed.includes(k)) payload[k] = updates[k];
@@ -112,6 +114,9 @@ async function updateProduct(userId, productId, updates) {
     }
 }
 
+/**
+ * Hapus produk (soft delete)
+ */
 async function deleteProduct(userId, productId) {
     try {
         const { error } = await supabase
@@ -127,29 +132,32 @@ async function deleteProduct(userId, productId) {
     }
 }
 
+/**
+ * Get produk by SKU atau ID
+ */
 async function getProduct(userId, skuOrId) {
     try {
-        let query = supabase
-            .from('products')
-            .select('*')
-            .eq('user_id', userId)
-            .eq('is_active', true);
+        let query = supabase.from('products').select('*').eq('user_id', userId);
 
         if (isNaN(skuOrId)) {
-            query = query.eq('sku', String(skuOrId).toUpperCase());
+            // SKU
+            query = query.eq('sku', skuOrId.toUpperCase());
         } else {
+            // ID
             query = query.eq('id', parseInt(skuOrId));
         }
 
-        const { data, error } = await query.maybeSingle();
+        const { data, error } = await query.single();
         if (error) throw error;
-        if (!data) return { success: false, product: null, error: 'Produk tidak ditemukan.' };
         return { success: true, product: data, error: null };
     } catch (err) {
         return { success: false, product: null, error: err.message };
     }
 }
 
+/**
+ * List semua produk user (dengan filter)
+ */
 async function listProducts(userId, filters = {}) {
     try {
         let query = supabase
@@ -159,94 +167,98 @@ async function listProducts(userId, filters = {}) {
 
         if (filters.active !== undefined) {
             query = query.eq('is_active', filters.active);
-        } else {
-            query = query.eq('is_active', true); // default hanya tampilkan aktif
         }
 
         if (filters.category) {
             query = query.eq('category', filters.category);
         }
 
-        // lowStock: filter di aplikasi karena Supabase tidak support column comparison langsung
+        if (filters.lowStock) {
+            // Stock di bawah minimum
+            query = query.lt('stock_current', supabase.raw('stock_min'));
+        }
+
         query = query.order('name', { ascending: true });
 
         const { data, error } = await query;
         if (error) throw error;
 
-        let products = data || [];
-
-        // Filter low stock di sisi Node jika diminta
-        if (filters.lowStock) {
-            products = products.filter(p =>
-                parseFloat(p.stock_current) <= parseFloat(p.stock_min)
-            );
-        }
-
-        return { success: true, products, error: null };
+        return { success: true, products: data || [], error: null };
     } catch (err) {
         return { success: false, products: [], error: err.message };
     }
 }
 
 // ════════════════════════════════════════════════════════════
-// STOCK ADJUSTMENT — ATOMIC via RPC (FIX RACE CONDITION)
-// Semua kalkulasi dilakukan di PostgreSQL dalam satu transaksi
-// Node.js TIDAK melakukan kalkulasi stok apapun
+// STOCK MOVEMENT
 // ════════════════════════════════════════════════════════════
 
+/**
+ * Adjust stock (IN/OUT/ADJUSTMENT)
+ * @param {string} type - 'in', 'out', 'adjustment'
+ */
 async function adjustStock(userId, productId, type, quantity, options = {}) {
-    const { referenceType = 'manual', referenceId, note } = options;
+    const { referenceType, referenceId, note } = options;
 
     try {
-        // ── Panggil RPC atomic — satu roundtrip, zero race condition ──
-        const { data: rpcResult, error: rpcErr } = await supabase.rpc('adjust_stock_atomic', {
-            p_product_id    : productId,
-            p_user_id       : userId,
-            p_type          : type,
-            p_quantity      : parseFloat(quantity),
-            p_reference_type: referenceType,
-            p_note          : note || null,
+        // Get current product
+        const { data: product, error: prodErr } = await supabase
+            .from('products')
+            .select('*')
+            .eq('id', productId)
+            .eq('user_id', userId)
+            .single();
+
+        if (prodErr || !product) {
+            return { success: false, error: 'Produk tidak ditemukan.' };
+        }
+
+        const stockBefore = parseFloat(product.stock_current) || 0;
+        let stockAfter = stockBefore;
+
+        if (type === 'in') {
+            stockAfter = stockBefore + parseFloat(quantity);
+        } else if (type === 'out') {
+            stockAfter = stockBefore - parseFloat(quantity);
+            if (stockAfter < 0) {
+                return { success: false, error: `Stock tidak cukup. Stock saat ini: ${formatQty(stockBefore, product.unit)} ${product.unit}` };
+            }
+        } else if (type === 'adjustment') {
+            stockAfter = parseFloat(quantity);
+        }
+
+        // Update stock di produk
+        const { error: updateErr } = await supabase
+            .from('products')
+            .update({ stock_current: stockAfter })
+            .eq('id', productId);
+
+        if (updateErr) throw updateErr;
+
+        // Log movement
+        await logStockMovement(userId, productId, {
+            type,
+            quantity     : Math.abs(parseFloat(quantity)),
+            stockBefore,
+            stockAfter,
+            referenceType: referenceType || 'manual',
+            referenceId  : referenceId || null,
+            note         : note || null,
         });
 
-        if (rpcErr) {
-            console.error('[STOCK] RPC error:', rpcErr.message);
-            return { success: false, error: rpcErr.message };
-        }
-
-        // RPC mengembalikan JSON object
-        const result = typeof rpcResult === 'string' ? JSON.parse(rpcResult) : rpcResult;
-
-        if (!result.success) {
-            return { success: false, error: result.error };
-        }
-
-        // ── Cek alert setelah update berhasil ──────────────────
-        const stockAfter = parseFloat(result.stock_after);
-        const stockMin   = parseFloat(result.stock_min);
-
-        if (stockAfter <= 0) {
-            await createStockAlert(userId, productId, 'out_of_stock', stockAfter);
-        } else if (stockAfter <= stockMin) {
+        // Check alert
+        if (stockAfter <= product.stock_min && stockAfter > 0) {
             await createStockAlert(userId, productId, 'low_stock', stockAfter);
-        } else {
-            // Stock kembali aman — resolve alert lama
-            await resolveStockAlerts(productId);
+        } else if (stockAfter <= 0) {
+            await createStockAlert(userId, productId, 'out_of_stock', stockAfter);
         }
 
         return {
             success    : true,
-            stockBefore: parseFloat(result.stock_before),
+            stockBefore,
             stockAfter,
-            product    : {
-                id        : productId,
-                name      : result.name,
-                sku       : result.sku,
-                unit      : result.unit,
-                stock_min : stockMin,
-                price_buy : parseFloat(result.price_buy),
-                price_sell: parseFloat(result.price_sell),
-            },
-            error: null,
+            product,
+            error      : null,
         };
     } catch (err) {
         console.error('[STOCK] adjustStock error:', err.message);
@@ -254,11 +266,32 @@ async function adjustStock(userId, productId, type, quantity, options = {}) {
     }
 }
 
-// ════════════════════════════════════════════════════════════
-// STOCK HISTORY
-// ════════════════════════════════════════════════════════════
+/**
+ * Log stock movement (internal)
+ */
+async function logStockMovement(userId, productId, data) {
+    try {
+        await supabase.from('stock_movements').insert([{
+            user_id       : userId,
+            product_id    : productId,
+            type          : data.type,
+            quantity      : data.quantity,
+            stock_before  : data.stockBefore,
+            stock_after   : data.stockAfter,
+            reference_type: data.referenceType,
+            reference_id  : data.referenceId,
+            note          : data.note,
+            created_by    : data.createdBy || 'system',
+        }]);
+    } catch (err) {
+        console.error('[STOCK] logStockMovement error:', err.message);
+    }
+}
 
-async function getStockHistory(userId, productId, limit = 20) {
+/**
+ * Get history pergerakan stock produk
+ */
+async function getStockHistory(userId, productId, limit = 50) {
     try {
         const { data, error } = await supabase
             .from('stock_movements')
@@ -281,7 +314,7 @@ async function getStockHistory(userId, productId, limit = 20) {
 
 async function createStockAlert(userId, productId, alertType, stockLevel) {
     try {
-        // Cek apakah alert serupa sudah ada dalam 24 jam (prevent spam)
+        // Cek apakah sudah pernah dikirim dalam 24 jam terakhir (prevent spam)
         const { data: recent } = await supabase
             .from('stock_alerts')
             .select('id')
@@ -289,9 +322,9 @@ async function createStockAlert(userId, productId, alertType, stockLevel) {
             .eq('alert_type', alertType)
             .is('resolved_at', null)
             .gte('alerted_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-            .maybeSingle();
+            .single();
 
-        if (recent) return; // Sudah ada, skip
+        if (recent) return; // Sudah ada alert yang belum resolved
 
         await supabase.from('stock_alerts').insert([{
             user_id    : userId,
@@ -304,6 +337,9 @@ async function createStockAlert(userId, productId, alertType, stockLevel) {
     }
 }
 
+/**
+ * Resolve alert (saat stock kembali aman)
+ */
 async function resolveStockAlerts(productId) {
     try {
         await supabase
@@ -316,18 +352,21 @@ async function resolveStockAlerts(productId) {
     }
 }
 
+/**
+ * Get pending alerts untuk user
+ */
 async function getPendingAlerts(userId) {
     try {
-        let query = supabase
+        const { data, error } = await supabase
             .from('stock_alerts')
-            .select(`*, products (id, sku, name, unit, stock_current, stock_min)`)
+            .select(`
+                *,
+                products (id, sku, name, unit, stock_current, stock_min)
+            `)
+            .eq('user_id', userId)
             .is('resolved_at', null)
             .order('alerted_at', { ascending: false });
 
-        // Jika userId null → ambil semua (untuk scheduler)
-        if (userId) query = query.eq('user_id', userId);
-
-        const { data, error } = await query;
         if (error) throw error;
         return { success: true, alerts: data || [], error: null };
     } catch (err) {
@@ -336,9 +375,12 @@ async function getPendingAlerts(userId) {
 }
 
 // ════════════════════════════════════════════════════════════
-// STOCK REPORT
+// LAPORAN STOCK
 // ════════════════════════════════════════════════════════════
 
+/**
+ * Generate laporan stock (snapshot saat ini)
+ */
 async function generateStockReport(userId) {
     try {
         const { data: products, error } = await supabase
@@ -351,37 +393,28 @@ async function generateStockReport(userId) {
 
         if (error) throw error;
 
-        let totalValue    = 0;
-        let totalItems    = 0;
-        let lowStockCount = 0;
-        let outStockCount = 0;
-        const byCategory  = {};
+        let totalValue = 0;
+        const byCategory = {};
 
         (products || []).forEach(p => {
-            const stockVal = parseFloat(p.stock_current) * parseFloat(p.price_buy);
-            totalValue += stockVal;
-            totalItems++;
-
-            if (parseFloat(p.stock_current) <= 0)              outStockCount++;
-            else if (parseFloat(p.stock_current) <= parseFloat(p.stock_min)) lowStockCount++;
+            const value = parseFloat(p.stock_current) * parseFloat(p.price_buy);
+            totalValue += value;
 
             if (!byCategory[p.category]) {
                 byCategory[p.category] = { count: 0, value: 0, items: [] };
             }
             byCategory[p.category].count++;
-            byCategory[p.category].value += stockVal;
+            byCategory[p.category].value += value;
             byCategory[p.category].items.push(p);
         });
 
         return {
-            success      : true,
-            totalProducts: totalItems,
+            success     : true,
+            totalProducts: products.length,
             totalValue,
-            lowStockCount,
-            outStockCount,
             byCategory,
             products,
-            error        : null,
+            error       : null,
         };
     } catch (err) {
         return { success: false, error: err.message };

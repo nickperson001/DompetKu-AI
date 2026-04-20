@@ -1,10 +1,6 @@
-# ════════════════════════════════════════════════════════════
-# DompetKu — Dockerfile
-# Node 20 Slim + Chromium untuk whatsapp-web.js / Puppeteer
-# ════════════════════════════════════════════════════════════
 FROM node:20-slim
 
-# Install Chromium + semua dependency sistem yang diperlukan
+# Install Chromium dan semua dependency sistem
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     libnss3 \
@@ -23,14 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libasound2 \
     fonts-liberation \
-    fonts-noto-color-emoji \
     wget \
     ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Beritahu Puppeteer untuk tidak download Chromium sendiri,
-# gunakan Chromium sistem yang sudah diinstall di atas
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXEC_PATH=/usr/bin/chromium
 ENV CHROME_BIN=/usr/bin/chromium
@@ -38,40 +31,34 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Copy package files dulu agar layer npm install ter-cache
-COPY package*.json ./
+# Copy package dulu — layer npm install ter-cache
+COPY package.json ./
 
-# Install dependencies production only
+# Install dependencies
 RUN npm install --production --no-audit --no-fund
 
-# Copy seluruh source code (termasuk public/)
-COPY public/ ./public
-COPY src/ ./src
+# Copy SEMUA file project ke /app
+COPY public /public
+COPY src /src
 
+# Debug: tampilkan isi saat build untuk konfirmasi
+RUN echo "=== /app ===" && ls -la \
+    && echo "=== /app/public ===" && ls -la public/ \
+    && echo "=== /app/src ===" && ls -la src/
 
-# Verifikasi file-file kritis ada — build GAGAL jika tidak ada
-# Ini mencegah deploy dengan file yang kurang
-RUN echo "=== Verifikasi file ===" \
-    && test -f public/index.html          || (echo "MISSING: public/index.html"          && exit 1) \
-    && test -f public/login.html          || (echo "MISSING: public/login.html"          && exit 1) \
-    && test -f src/config/supabase.js     || (echo "MISSING: src/config/supabase.js"     && exit 1) \
-    && test -f src/handlers/message.js    || (echo "MISSING: src/handlers/message.js"    && exit 1) \
-    && test -f src/jobs/scheduler.js      || (echo "MISSING: src/jobs/scheduler.js"      && exit 1) \
-    && test -f src/utils/stockManager.js  || (echo "MISSING: src/utils/stockManager.js"  && exit 1) \
-    && test -f src/utils/mediaProcessor.js|| (echo "MISSING: src/utils/mediaProcessor.js"&& exit 1) \
-    && echo "=== Semua file OK ==="
-
-# Tampilkan isi public/ untuk konfirmasi saat build
-RUN echo "=== Isi public/ ===" && ls -la public/
-
-# Buat folder tmp yang diperlukan runtime
-RUN mkdir -p /tmp/wa-session /tmp/wa-version-cache \
-    && chmod 777 /tmp/wa-session /tmp/wa-version-cache
+# Verifikasi setiap file kritis — build GAGAL jika ada yang kurang
+RUN test -f index.js                     || (echo "MISSING: index.js"                     && exit 1)
+RUN test -f public/index.html            || (echo "MISSING: public/index.html"            && exit 1)
+RUN test -f public/login.html            || (echo "MISSING: public/login.html"            && exit 1)
+RUN test -f src/config/supabase.js       || (echo "MISSING: src/config/supabase.js"       && exit 1)
+RUN test -f src/handlers/message.js      || (echo "MISSING: src/handlers/message.js"      && exit 1)
+RUN test -f src/jobs/scheduler.js        || (echo "MISSING: src/jobs/scheduler.js"        && exit 1)
+RUN test -f src/utils/stockManager.js    || (echo "MISSING: src/utils/stockManager.js"    && exit 1)
+RUN test -f src/utils/mediaProcessor.js  || (echo "MISSING: src/utils/mediaProcessor.js"  && exit 1)
+RUN echo "=== Semua file OK ==="
 
 EXPOSE 3000
 
-# Docker healthcheck — cek setiap 30 detik
-# start-period 90 detik: beri waktu Chromium startup
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
     CMD wget -qO- http://localhost:3000/ping || exit 1
 

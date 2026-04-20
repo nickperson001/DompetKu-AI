@@ -1,16 +1,16 @@
 'use strict';
 
-const express   = require('express');
-const http      = require('http');
+const express    = require('express');
+const http       = require('http');
 const { Server } = require('socket.io');
-const qrcodeWeb = require('qrcode');
+const qrcodeWeb  = require('qrcode');
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const session   = require('express-session');
-const { Pool }  = require('pg');
-const pgSession = require('connect-pg-simple')(session);
-const os        = require('os');
-const path      = require('path');
-const fs        = require('fs');
+const session    = require('express-session');
+const { Pool }   = require('pg');
+const pgSession  = require('connect-pg-simple')(session);
+const os         = require('os');
+const path       = require('path');
+const fs         = require('fs');
 require('dotenv').config();
 
 const { handleMessage }  = require('./src/handlers/message');
@@ -28,7 +28,6 @@ const port = process.env.PORT || 3000;
 // SESSION STORE — PostgreSQL dengan fallback ke memory
 // ════════════════════════════════════════════════════════════
 let pgPool = null;
-
 if (process.env.DATABASE_URL) {
     try {
         pgPool = new Pool({
@@ -52,14 +51,14 @@ function buildSessionMiddleware() {
         saveUninitialized: false,
         cookie: {
             secure  : process.env.NODE_ENV === 'production',
-            maxAge  : 30 * 24 * 60 * 60 * 1000, // 30 hari
+            maxAge  : 30 * 24 * 60 * 60 * 1000,
             httpOnly: true,
             sameSite: 'lax',
         },
     };
 
     if (!pgPool) {
-        console.warn('[SESSION] ⚠️  Pakai memory store — set DATABASE_URL untuk session persisten');
+        console.warn('[SESSION] ⚠️  Memory store — set DATABASE_URL untuk session persisten');
         return session(base);
     }
 
@@ -87,8 +86,7 @@ app.use(sessionMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Static files: hanya subfolder assets/ yang bebas diakses
-// index.html dan login.html TIDAK lewat static agar auth bisa dikontrol
+// Hanya expose /assets — index.html & login.html via route eksplisit
 app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
 
 // ════════════════════════════════════════════════════════════
@@ -105,30 +103,24 @@ const activeBroadcasts = new Map();
 const addLog = (level, message, data = {}) => {
     const log = {
         timestamp: new Date().toISOString(),
-        level,
-        message,
-        data,
+        level, message, data,
         memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
     };
     systemLogs.unshift(log);
     if (systemLogs.length > 1000) systemLogs.pop();
-    // Emit ke socket — bungkus try/catch agar tidak crash sebelum io siap
     try { io.emit('system_log', log); } catch (_) {}
     console.log(`[${level.toUpperCase()}] ${message}`);
 };
 
 // ════════════════════════════════════════════════════════════
-// PING — Selalu 200, DIPAKAI Railway healthcheck
-// Server hidup = ping respond = healthcheck PASS
-// Tidak bergantung status WA atau database
+// PING — Selalu 200, dipakai Railway healthcheck
 // ════════════════════════════════════════════════════════════
 app.get('/ping', (req, res) => {
     res.status(200).json({ ok: true, ts: Date.now() });
 });
 
 // ════════════════════════════════════════════════════════════
-// HEALTH — Detail status, untuk monitoring saja
-// SELALU return 200 agar Railway tidak kill pod
+// HEALTH — Detail monitoring, SELALU 200
 // ════════════════════════════════════════════════════════════
 app.get('/health', async (req, res) => {
     const used = process.memoryUsage();
@@ -136,9 +128,7 @@ app.get('/health', async (req, res) => {
     try {
         const { error } = await supabase.from('users').select('id').limit(1);
         dbStatus = error ? 'error' : 'connected';
-    } catch (_) {
-        dbStatus = 'error';
-    }
+    } catch (_) { dbStatus = 'error'; }
 
     res.status(200).json({
         status   : 'running',
@@ -177,11 +167,7 @@ const isAdmin = (req, res, next) => {
 // PUBLIC ROUTES
 // ════════════════════════════════════════════════════════════
 app.get('/login', (req, res) => {
-    // Jika sudah login langsung ke dashboard
-    if (req.session && req.session.authenticated) {
-        return res.redirect('/');
-    }
-    // Kirim file login.html dari folder public/
+    if (req.session && req.session.authenticated) return res.redirect('/');
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
@@ -191,15 +177,15 @@ app.get('/login', (req, res) => {
 app.post('/admin/login', (req, res) => {
     const { username, password } = req.body || {};
 
-    // Validasi body tidak kosong
     if (!username || !password) {
         return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
     }
 
+    // PENTING: env var harus ADMIN_USERNAME dan ADMIN_PASSWORD
     const validUser = process.env.ADMIN_USERNAME || 'admin';
     const validPass = process.env.ADMIN_PASSWORD || 'admin123';
 
-    console.log(`[AUTH] Login: "${username}" dari ${req.ip}`);
+    console.log(`[AUTH] Login attempt: "${username}" dari ${req.ip}`);
 
     if (username === validUser && password === validPass) {
         req.session.authenticated = true;
@@ -223,7 +209,6 @@ app.get('/', isAdmin, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Users dengan pagination + search + filter
 app.get('/api/admin/users', isAdmin, async (req, res) => {
     try {
         const page   = Math.max(1, parseInt(req.query.page)   || 1);
@@ -233,31 +218,22 @@ app.get('/api/admin/users', isAdmin, async (req, res) => {
 
         let query = supabase.from('users').select('*', { count: 'exact' });
         if (status !== 'all') query = query.eq('status', status);
-        if (search) {
-            query = query.or(`store_name.ilike.%${search}%,id.ilike.%${search}%`);
-        }
+        if (search) query = query.or(`store_name.ilike.%${search}%,id.ilike.%${search}%`);
 
         const { data, error, count } = await query
             .order('created_at', { ascending: false })
             .range((page - 1) * limit, page * limit - 1);
 
         if (error) throw error;
-
         res.json({
             users     : data || [],
-            pagination: {
-                page,
-                limit,
-                total     : count || 0,
-                totalPages: Math.ceil((count || 0) / limit),
-            },
+            pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Update status user
 app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
     const { id }     = req.params;
     const { status } = req.body;
@@ -280,7 +256,6 @@ app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
         const { error } = await supabase.from('users').update(updates).eq('id', id);
         if (error) throw error;
 
-        // Kirim notifikasi WA jika bot online
         if (clientReady && waClient) {
             const notifs = {
                 demo     : 'ℹ️ Status akun Anda diubah ke DEMO (5 transaksi/hari).',
@@ -299,13 +274,11 @@ app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
     }
 });
 
-// Toggle maintenance mode
 app.post('/api/admin/maintenance', isAdmin, async (req, res) => {
     const { enabled } = req.body;
     try {
         await supabase.from('settings')
             .upsert({ key: 'maintenance_mode', value: String(Boolean(enabled)) });
-
         maintenanceMode = Boolean(enabled);
         addLog('info', `Maintenance: ${maintenanceMode ? 'ON' : 'OFF'}`);
         res.json({ success: true, maintenance: maintenanceMode });
@@ -314,15 +287,10 @@ app.post('/api/admin/maintenance', isAdmin, async (req, res) => {
     }
 });
 
-// Broadcast
 app.post('/api/admin/broadcast', isAdmin, async (req, res) => {
     const { message, target } = req.body;
-    if (!message?.trim()) {
-        return res.status(400).json({ error: 'Message diperlukan' });
-    }
-    if (!clientReady || !waClient) {
-        return res.status(503).json({ error: 'Bot belum online — scan QR dulu' });
-    }
+    if (!message?.trim()) return res.status(400).json({ error: 'Message diperlukan' });
+    if (!clientReady || !waClient) return res.status(503).json({ error: 'Bot belum online — scan QR dulu' });
 
     try {
         let query = supabase.from('users').select('id, store_name');
@@ -331,14 +299,7 @@ app.post('/api/admin/broadcast', isAdmin, async (req, res) => {
         if (error) throw error;
 
         const jobId = Date.now().toString();
-        const job   = {
-            id    : jobId,
-            total : users.length,
-            sent  : 0,
-            failed: 0,
-            status: 'running',
-            target: target || 'all',
-        };
+        const job   = { id: jobId, total: users.length, sent: 0, failed: 0, status: 'running', target: target || 'all' };
         activeBroadcasts.set(jobId, job);
         processBroadcast(jobId, users, message);
 
@@ -364,19 +325,11 @@ async function processBroadcast(jobId, users, message) {
                 .replace(/\{nama_toko\}/gi, users[i].store_name);
             if (waClient) await waClient.sendMessage(users[i].id, text);
             job.sent++;
-        } catch (_) {
-            job.failed++;
-        }
+        } catch (_) { job.failed++; }
 
         if (i % 5 === 0 || i === users.length - 1) {
             job.progress = Math.round(((i + 1) / users.length) * 100);
-            io.emit('broadcast_progress', {
-                jobId,
-                current: i + 1,
-                total  : users.length,
-                sent   : job.sent,
-                failed : job.failed,
-            });
+            io.emit('broadcast_progress', { jobId, current: i + 1, total: users.length, sent: job.sent, failed: job.failed });
         }
         await new Promise(r => setTimeout(r, 1200));
     }
@@ -386,24 +339,17 @@ async function processBroadcast(jobId, users, message) {
     addLog('info', `Broadcast selesai: ${job.sent} terkirim, ${job.failed} gagal`);
 }
 
-// System logs
 app.get('/api/admin/logs', isAdmin, (req, res) => {
     const limit = Math.min(500, parseInt(req.query.limit) || 100);
     res.json(systemLogs.slice(0, limit));
 });
 
-// Bot status
 app.get('/api/admin/status', isAdmin, (req, res) => {
-    res.json({
-        status     : botStatus,
-        ready      : clientReady,
-        qr         : currentQR,
-        maintenance: maintenanceMode,
-    });
+    res.json({ status: botStatus, ready: clientReady, qr: currentQR, maintenance: maintenanceMode });
 });
 
 // ════════════════════════════════════════════════════════════
-// SOCKET.IO — Gunakan sessionMiddleware yang sama dengan Express
+// SOCKET.IO — Share session dengan Express
 // ════════════════════════════════════════════════════════════
 io.use((socket, next) => {
     sessionMiddleware(socket.request, socket.request.res || {}, next);
@@ -413,17 +359,8 @@ io.on('connection', (socket) => {
     const isAuth = socket.request.session?.authenticated;
     addLog('info', `WS: ${socket.id} [${isAuth ? 'admin' : 'guest'}]`);
 
-    // Kirim state bot saat ini — QR harus tampil meski belum login
-    socket.emit('bot_update', {
-        status: botStatus,
-        qr    : currentQR,
-        ready : clientReady,
-    });
-
-    // Log history hanya untuk admin
-    if (isAuth) {
-        socket.emit('logs_history', systemLogs.slice(0, 50));
-    }
+    socket.emit('bot_update', { status: botStatus, qr: currentQR, ready: clientReady });
+    if (isAuth) socket.emit('logs_history', systemLogs.slice(0, 50));
 
     socket.on('request_reconnect', () => {
         if (!clientReady) {
@@ -438,15 +375,17 @@ io.on('connection', (socket) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// WHATSAPP — Session persistence ke Supabase
+// WHATSAPP — Session dir
 // ════════════════════════════════════════════════════════════
-const WA_SESSION_DIR = process.env.WA_SESSION_DIR || '/tmp/wa-session';
+// Volume Railway di-mount ke /.wwebjs_auth — gunakan itu agar
+// session WA tidak hilang saat redeploy
+const WA_SESSION_DIR = process.env.WA_SESSION_DIR || '/.wwebjs_auth';
 
 try {
     if (!fs.existsSync(WA_SESSION_DIR)) {
         fs.mkdirSync(WA_SESSION_DIR, { recursive: true });
-        console.log(`[WA] Session dir dibuat: ${WA_SESSION_DIR}`);
     }
+    console.log(`[WA] Session dir: ${WA_SESSION_DIR}`);
 } catch (e) {
     console.error('[WA] Gagal buat session dir:', e.message);
 }
@@ -454,28 +393,24 @@ try {
 async function saveSessionToDB(sessionData) {
     if (!sessionData) return;
     try {
-        const { error } = await supabase.from('wa_sessions').upsert({
-            id        : 'main',
-            data      : JSON.stringify(sessionData),
-            updated_at: new Date().toISOString(),
+        await supabase.from('wa_sessions').upsert({
+            id: 'main', data: JSON.stringify(sessionData), updated_at: new Date().toISOString(),
         });
-        if (error) console.error('[WA-SESSION] Save error:', error.message);
-        else console.log('[WA-SESSION] ✅ Session disimpan ke DB');
     } catch (e) {
         console.error('[WA-SESSION] Save gagal:', e.message);
     }
 }
 
 // ════════════════════════════════════════════════════════════
-// INIT WHATSAPP — Fungsi terpisah agar bisa di-retry
+// INIT WHATSAPP
 // ════════════════════════════════════════════════════════════
 function initWhatsApp() {
-    addLog('info', '🔄 Memulai inisialisasi WhatsApp...');
+    addLog('info', '🔄 Inisialisasi WhatsApp...');
     botStatus = 'Initializing';
     try { io.emit('bot_update', { status: botStatus, qr: '', ready: false }); } catch (_) {}
 
-    // Deteksi Chromium path di sistem
-    const chromiumCandidates = [
+    // Deteksi Chromium
+    const chromiumPaths = [
         process.env.PUPPETEER_EXEC_PATH,
         '/usr/bin/chromium',
         '/usr/bin/chromium-browser',
@@ -484,17 +419,11 @@ function initWhatsApp() {
     ].filter(Boolean);
 
     let executablePath;
-    for (const p of chromiumCandidates) {
-        if (fs.existsSync(p)) {
-            executablePath = p;
-            console.log(`[WA] Chromium ditemukan: ${p}`);
-            break;
-        }
+    for (const p of chromiumPaths) {
+        if (fs.existsSync(p)) { executablePath = p; break; }
     }
 
-    if (!executablePath) {
-        addLog('warn', '⚠️ Chromium tidak ditemukan — mencoba default Puppeteer path');
-    }
+    console.log(`[WA] Chromium: ${executablePath || 'tidak ditemukan, pakai default'}`);
 
     const client = new Client({
         authStrategy: new LocalAuth({
@@ -516,126 +445,81 @@ function initWhatsApp() {
                 '--disable-extensions',
                 '--disable-background-networking',
                 '--disable-sync',
-                '--disable-translate',
                 '--hide-scrollbars',
                 '--mute-audio',
                 '--safebrowsing-disable-auto-update',
-                '--disable-features=TranslateUI',
             ],
-            timeout: 120_000, // 2 menit untuk startup Chromium
+            timeout: 120_000,
         },
         restartOnAuthFail: true,
         qrMaxRetries     : 10,
     });
 
-    // ── QR Generated ──────────────────────────────────────
     client.on('qr', async (qr) => {
         botStatus   = 'Scan QR';
         clientReady = false;
-        try {
-            currentQR = await qrcodeWeb.toDataURL(qr);
-        } catch (_) {}
-        addLog('warn', '📱 QR Code siap — buka dashboard dan scan dengan WhatsApp');
+        try { currentQR = await qrcodeWeb.toDataURL(qr); } catch (_) {}
+        addLog('warn', '📱 QR siap — buka dashboard dan scan');
         io.emit('bot_update', { status: botStatus, qr: currentQR, ready: false });
     });
 
-    // ── Loading Screen ────────────────────────────────────
-    client.on('loading_screen', (percent, message) => {
-        addLog('info', `WA Loading: ${percent}% — ${message}`);
+    client.on('loading_screen', (percent, msg) => {
+        addLog('info', `WA Loading: ${percent}% — ${msg}`);
     });
 
-    // ── Authenticated ─────────────────────────────────────
     client.on('authenticated', async (sessionData) => {
         addLog('info', '🔐 WhatsApp authenticated');
         if (sessionData) await saveSessionToDB(sessionData);
     });
 
-    // ── Auth Failure ──────────────────────────────────────
     client.on('auth_failure', (reason) => {
         addLog('error', `❌ Auth failure: ${reason}`);
-        botStatus   = 'Auth Failed';
-        clientReady = false;
-        currentQR   = '';
-        waClient    = null;
+        botStatus = 'Auth Failed'; clientReady = false; currentQR = ''; waClient = null;
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
     });
 
-    // ── Ready ─────────────────────────────────────────────
     client.on('ready', () => {
-        botStatus   = 'Online';
-        clientReady = true;
-        currentQR   = '';
-        waClient    = client;
-        addLog('info', '🟢 WhatsApp ONLINE & siap menerima pesan');
+        botStatus = 'Online'; clientReady = true; currentQR = ''; waClient = client;
+        addLog('info', '🟢 WhatsApp ONLINE');
         io.emit('bot_update', { status: botStatus, qr: null, ready: true });
-
-        // Init scheduler setelah bot ready
-        try {
-            initSchedulers(client);
-        } catch (e) {
-            addLog('error', `Scheduler init gagal: ${e.message}`);
-        }
+        try { initSchedulers(client); } catch (e) { addLog('error', `Scheduler gagal: ${e.message}`); }
     });
 
-    // ── Message Handler ───────────────────────────────────
     client.on('message', async (msg) => {
         if (maintenanceMode && !msg.fromMe) {
-            msg.reply('🛠️ Sistem sedang dalam perbaikan. Harap tunggu sebentar.').catch(() => {});
+            msg.reply('🛠️ Sistem sedang dalam perbaikan.').catch(() => {});
             return;
         }
         try {
             addLog('info', `MSG ← ${msg.from}`, { body: (msg.body || '').substring(0, 50) });
             await handleMessage(msg, client);
-            io.emit('new_log', {
-                from     : msg.from,
-                body     : msg.body,
-                timestamp: new Date().toISOString(),
-            });
+            io.emit('new_log', { from: msg.from, body: msg.body, timestamp: new Date().toISOString() });
         } catch (err) {
-            addLog('error', `Message handler error: ${err.message}`);
+            addLog('error', `Message error: ${err.message}`);
         }
     });
 
-    // ── Disconnected ──────────────────────────────────────
     client.on('disconnected', (reason) => {
-        botStatus   = 'Disconnected';
-        clientReady = false;
-        waClient    = null;
+        botStatus = 'Disconnected'; clientReady = false; waClient = null;
         addLog('error', `🔴 WA Terputus: ${reason}`);
         io.emit('bot_update', { status: botStatus, ready: false });
-
-        // Auto-reconnect setelah 10 detik
-        setTimeout(() => {
-            addLog('info', '🔄 Auto-reconnect...');
-            initWhatsApp();
-        }, 10_000);
+        setTimeout(() => { addLog('info', '🔄 Auto-reconnect...'); initWhatsApp(); }, 10_000);
     });
 
-    // ── Initialize — error tidak crash server utama ───────
     client.initialize().catch((err) => {
-        addLog('error', `WA initialize error: ${err.message}`);
-        botStatus   = 'Error';
-        clientReady = false;
-        waClient    = null;
+        addLog('error', `WA init error: ${err.message}`);
+        botStatus = 'Error'; clientReady = false; waClient = null;
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
-
-        // Retry setelah 30 detik
-        setTimeout(() => {
-            addLog('info', '🔄 Retry WA init...');
-            initWhatsApp();
-        }, 30_000);
+        setTimeout(() => { addLog('info', '🔄 Retry WA init...'); initWhatsApp(); }, 30_000);
     });
 }
 
 // ════════════════════════════════════════════════════════════
-// GLOBAL ERROR HANDLERS
-// Process TIDAK boleh crash — Railway akan restart dari awal
+// GLOBAL ERROR HANDLERS — Jangan pernah crash process
 // ════════════════════════════════════════════════════════════
 process.on('uncaughtException', (err) => {
-    console.error(`[FATAL] uncaughtException: ${err.message}`);
-    console.error(err.stack);
+    console.error(`[FATAL] uncaughtException: ${err.message}\n${err.stack}`);
     addLog('error', `uncaughtException: ${err.message}`);
-    // Tidak exit — biarkan server tetap melayani request
 });
 
 process.on('unhandledRejection', (reason) => {
@@ -645,18 +529,12 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// START SERVER
-// PENTING: server.listen DULU, baru initWhatsApp()
-// Railway healthcheck hit /ping dalam hitungan detik setelah deploy
-// Jika WA init duluan dan crash, port tidak pernah terbind = pod mati
+// START — Server listen DULU, WA init BELAKANGAN
 // ════════════════════════════════════════════════════════════
 server.listen(port, '0.0.0.0', (err) => {
-    if (err) {
-        console.error('[FATAL] server.listen gagal:', err);
-        process.exit(1);
-    }
+    if (err) { console.error('[FATAL] Listen gagal:', err); process.exit(1); }
 
-    console.log('\n' + '═'.repeat(55));
+    console.log('\n' + '═'.repeat(52));
     console.log(`  🚀 DompetKu HQ v2.0`);
     console.log(`  📍 Port      : ${port}`);
     console.log(`  📍 Login     : http://localhost:${port}/login`);
@@ -665,13 +543,11 @@ server.listen(port, '0.0.0.0', (err) => {
     console.log(`  📍 Health    : http://localhost:${port}/health`);
     console.log(`  💾 Session   : ${pgPool ? 'PostgreSQL ✅' : 'Memory ⚠️'}`);
     console.log(`  📁 WA Dir    : ${WA_SESSION_DIR}`);
-    console.log('═'.repeat(55) + '\n');
+    console.log('═'.repeat(52) + '\n');
 
     addLog('info', `Server berjalan di port ${port}`);
 
-    // Init WA 3 detik setelah server listen
-    // Memberi waktu port terbind sempurna dan Railway bisa hit /ping
-    setTimeout(() => {
-        initWhatsApp();
-    }, 3000);
+    // WA init 3 detik setelah server ready
+    // Railway hit /ping lebih dulu → healthcheck PASS → pod tidak di-kill
+    setTimeout(() => initWhatsApp(), 3000);
 });
