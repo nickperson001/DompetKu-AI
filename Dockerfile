@@ -1,61 +1,76 @@
 # ════════════════════════════════════════════════════════════
 # DompetKu — Dockerfile
-# Base: Node 20 + Chromium untuk Puppeteer/whatsapp-web.js
+# Node 20 Slim + Chromium untuk whatsapp-web.js / Puppeteer
 # ════════════════════════════════════════════════════════════
-
 FROM node:20-slim
 
-# Install Chromium dan dependency sistem yang diperlukan Puppeteer
+# Install Chromium + semua dependency sistem yang diperlukan
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
-    chromium-sandbox \
     libnss3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
     libcups2 \
     libdrm2 \
     libgbm1 \
-    libasound2 \
-    libpangocairo-1.0-0 \
     libxss1 \
     libgtk-3-0 \
     libxshmfence1 \
     libx11-xcb1 \
     libxcb-dri3-0 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
     fonts-liberation \
-    fonts-noto \
+    fonts-noto-color-emoji \
     wget \
     ca-certificates \
-    --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set env Puppeteer agar tidak download Chromium sendiri
+# Beritahu Puppeteer untuk tidak download Chromium sendiri,
+# gunakan Chromium sistem yang sudah diinstall di atas
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXEC_PATH=/usr/bin/chromium
 ENV CHROME_BIN=/usr/bin/chromium
+ENV NODE_ENV=production
 
-# Working directory
 WORKDIR /app
 
-# Copy package files dulu (layer cache)
+# Copy package files dulu agar layer npm install ter-cache
 COPY package*.json ./
 
-# Install dependencies
+# Install dependencies production only
 RUN npm install --production --no-audit --no-fund
 
-# Copy semua source code
-COPY . .
+# Copy seluruh source code (termasuk public/)
+COPY public/ ./ src/
 
-# Buat folder yang diperlukan
-RUN mkdir -p /tmp/wa-session /tmp/wa-version-cache
+# Verifikasi file-file kritis ada — build GAGAL jika tidak ada
+# Ini mencegah deploy dengan file yang kurang
+RUN echo "=== Verifikasi file ===" \
+    && test -f public/index.html          || (echo "MISSING: public/index.html"          && exit 1) \
+    && test -f public/login.html          || (echo "MISSING: public/login.html"          && exit 1) \
+    && test -f src/config/supabase.js     || (echo "MISSING: src/config/supabase.js"     && exit 1) \
+    && test -f src/handlers/message.js    || (echo "MISSING: src/handlers/message.js"    && exit 1) \
+    && test -f src/jobs/scheduler.js      || (echo "MISSING: src/jobs/scheduler.js"      && exit 1) \
+    && test -f src/utils/stockManager.js  || (echo "MISSING: src/utils/stockManager.js"  && exit 1) \
+    && test -f src/utils/mediaProcessor.js|| (echo "MISSING: src/utils/mediaProcessor.js"&& exit 1) \
+    && echo "=== Semua file OK ==="
 
-# Expose port
+# Tampilkan isi public/ untuk konfirmasi saat build
+RUN echo "=== Isi public/ ===" && ls -la public/
+
+# Buat folder tmp yang diperlukan runtime
+RUN mkdir -p /tmp/wa-session /tmp/wa-version-cache \
+    && chmod 777 /tmp/wa-session /tmp/wa-version-cache
+
 EXPOSE 3000
 
-# Health check internal Docker
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+# Docker healthcheck — cek setiap 30 detik
+# start-period 90 detik: beri waktu Chromium startup
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
     CMD wget -qO- http://localhost:3000/ping || exit 1
 
-# Start
 CMD ["node", "index.js"]
