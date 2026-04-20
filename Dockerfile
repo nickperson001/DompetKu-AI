@@ -45,7 +45,9 @@ COPY package*.json ./
 RUN npm install --production --no-audit --no-fund
 
 # Copy seluruh source code (termasuk public/)
-COPY public/ ./ src/
+COPY public/ ./public
+COPY src/ ./src
+
 
 # Verifikasi file-file kritis ada — build GAGAL jika tidak ada
 # Ini mencegah deploy dengan file yang kurang

@@ -1,31 +1,32 @@
-# Dependencies — jangan copy dari local, Railway install sendiri
+# Dependencies
 node_modules/
 npm-debug.log
 yarn-error.log
-package-lock.json
 
-# Environment — JANGAN PERNAH masuk container
+# Environment — JANGAN masuk container
 .env
-.env.local
-.env.*.local
+.env.*
 
 # Git
 .git/
 .gitignore
 
-# WA session local — container pakai /tmp
+# WA session local
 .wwebjs_auth/
 .wwebjs_cache/
-tmp/
 
-# OS files
+# Temp
+tmp/
+*.log
+
+# OS
 .DS_Store
 Thumbs.db
-*.log
 
 # Editor
 .vscode/
 .idea/
 
-# PENTING: public/ TIDAK di-ignore
-# Semua file di public/ harus masuk container
+# CATATAN:
+# public/ TIDAK ada di sini — harus masuk container
+# src/ TIDAK ada di sini — harus masuk container
