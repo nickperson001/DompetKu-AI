@@ -38,8 +38,7 @@ COPY package.json ./
 RUN npm install --production --no-audit --no-fund
 
 # Copy SEMUA file project ke /app
-COPY public /public
-COPY src /src
+COPY . .
 
 # Debug: tampilkan isi saat build untuk konfirmasi
 RUN echo "=== /app ===" && ls -la \
