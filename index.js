@@ -19,25 +19,28 @@ const supabase           = require('./src/config/supabase');
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server);
-const port   = process.env.PORT || 3000;
+const io     = new Server(server, {
+    cors: { origin: '*', methods: ['GET', 'POST'] }
+});
+const port = process.env.PORT || 3000;
 
 // ════════════════════════════════════════════════════════════
-// SESSION STORE (PostgreSQL + fallback memory)
+// SESSION STORE
 // ════════════════════════════════════════════════════════════
 let pgPool = null;
 if (process.env.DATABASE_URL) {
     try {
         pgPool = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl             : process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-            max             : 5,   // Batasi connection pool
-            idleTimeoutMillis: 30000,
+            connectionString       : process.env.DATABASE_URL,
+            ssl                    : process.env.NODE_ENV === 'production'
+                ? { rejectUnauthorized: false } : false,
+            max                    : 5,
+            idleTimeoutMillis      : 30000,
             connectionTimeoutMillis: 5000,
         });
         console.log('[SESSION] PostgreSQL pool created');
     } catch (err) {
-        console.error('[SESSION] Pool creation failed:', err.message);
+        console.error('[SESSION] Pool failed:', err.message);
     }
 }
 
@@ -48,15 +51,14 @@ function buildSessionMiddleware() {
         saveUninitialized: false,
         cookie: {
             secure  : process.env.NODE_ENV === 'production',
-            maxAge  : 30 * 24 * 60 * 60 * 1000, // 30 hari
+            maxAge  : 30 * 24 * 60 * 60 * 1000,
             httpOnly: true,
             sameSite: 'lax',
         },
     };
 
     if (!pgPool) {
-        console.warn('[SESSION] ⚠️  Pakai memory store — session hilang saat restart');
-        console.warn('[SESSION]    Set DATABASE_URL di Railway untuk session persisten');
+        console.warn('[SESSION] ⚠️ Memory store — set DATABASE_URL untuk session persisten');
         return session(base);
     }
 
@@ -67,15 +69,10 @@ function buildSessionMiddleware() {
             createTableIfMissing: true,
             errorLog            : (err) => console.error('[SESSION] Store error:', err.message),
         });
-
-        store.on && store.on('error', (err) => {
-            console.error('[SESSION] Store runtime error:', err.message);
-        });
-
-        console.log('[SESSION] ✅ PostgreSQL session store aktif');
+        console.log('[SESSION] ✅ PostgreSQL store aktif');
         return session({ ...base, store });
     } catch (err) {
-        console.error('[SESSION] ❌ Gagal init pg store, fallback memory:', err.message);
+        console.error('[SESSION] Fallback ke memory:', err.message);
         return session(base);
     }
 }
@@ -84,48 +81,23 @@ const sessionMiddleware = buildSessionMiddleware();
 
 app.use(sessionMiddleware);
 app.use(express.json());
-app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
+app.use(express.urlencoded({ extended: true }));
 
 // ════════════════════════════════════════════════════════════
-// WA SESSION DIR — pastikan folder ada di /tmp
+// STATIC FILES
 // ════════════════════════════════════════════════════════════
-// FIX: LocalAuth di container stateless (Railway) kehilangan session
-// saat redeploy karena /tmp tidak persisten.
-// Solusi: /tmp bertahan selama container HIDUP (restart OK),
-// hanya hilang saat REDEPLOY. Scan QR ulang diperlukan setelah deploy baru.
-// Untuk session persisten antar deploy → gunakan Railway Volume (paid)
-// atau simpan/restore session files ke Supabase Storage (advanced).
-const WA_SESSION_DIR = process.env.WA_SESSION_DIR || '/tmp/wa-session';
-
-// Pastikan direktori ada
-if (!fs.existsSync(WA_SESSION_DIR)) {
-    fs.mkdirSync(WA_SESSION_DIR, { recursive: true });
-    console.log(`[WA] Session dir created: ${WA_SESSION_DIR}`);
-}
-
-async function saveSessionToDB(sessionData) {
-    if (!sessionData) return;
-    try {
-        const { error } = await supabase.from('wa_sessions').upsert({
-            id        : 'main',
-            data      : JSON.stringify(sessionData),
-            updated_at: new Date().toISOString(),
-        });
-        if (error) console.error('[WA-SESSION] Save error:', error.message);
-        else console.log('[WA-SESSION] ✅ Session saved to DB');
-    } catch (e) {
-        console.error('[WA-SESSION] Save failed:', e.message);
-    }
-}
+// Serve public folder
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ════════════════════════════════════════════════════════════
 // GLOBAL STATE
 // ════════════════════════════════════════════════════════════
-let botStatus        = 'Initializing';
-let currentQR        = '';
-let clientReady      = false;
-let maintenanceMode  = false;
-let systemLogs       = [];
+let botStatus      = 'Initializing';
+let currentQR      = '';
+let clientReady    = false;
+let maintenanceMode = false;
+let systemLogs     = [];
+let waClient       = null; // Bisa null jika Puppeteer belum siap
 const activeBroadcasts = new Map();
 
 const addLog = (level, message, data = {}) => {
@@ -136,156 +108,32 @@ const addLog = (level, message, data = {}) => {
     };
     systemLogs.unshift(log);
     if (systemLogs.length > 1000) systemLogs.pop();
-    io.emit('system_log', log);
+    try { io.emit('system_log', log); } catch (_) {}
+    console.log(`[${level.toUpperCase()}] ${message}`);
 };
 
 // ════════════════════════════════════════════════════════════
-// WHATSAPP CLIENT
-// FIX LocalAuth untuk container:
-// - dataPath ke /tmp/wa-session (writable di Railway)
-// - clientId untuk namespace session (hindari konflik multi-deploy)
-// - webVersionCache untuk cache versi WA agar tidak re-download setiap start
+// PING — Selalu 200, Railway healthcheck menggunakan ini
 // ════════════════════════════════════════════════════════════
-const client = new Client({
-    authStrategy: new LocalAuth({
-        dataPath: WA_SESSION_DIR,
-        clientId: 'dompetku-bot', // Namespace unik untuk session files
-    }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--single-process',
-            '--no-zygote',
-            '--disable-gpu',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-sync',
-            '--disable-translate',
-            '--hide-scrollbars',
-            '--metrics-recording-only',
-            '--mute-audio',
-            '--safebrowsing-disable-auto-update',
-        ],
-        executablePath: process.env.PUPPETEER_EXEC_PATH || '/usr/bin/google-chrome-stable' || '/usr/bin/chromium-browser',
-        timeout: 60000, // 60 detik timeout untuk startup Chromium
-    },
-    webVersionCache: {
-        type : 'remote',
-        path : 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html', // Cache versi WA di /tmp
-    },
-    restartOnAuthFail: true,
-    qrMaxRetries    : 5,     // Coba generate QR maksimal 5 kali
-});
-
-// ── WA Events ───────────────────────────────────────────────
-client.on('qr', async (qr) => {
-    botStatus   = 'Scan QR';
-    currentQR   = await qrcodeWeb.toDataURL(qr);
-    clientReady = false;
-    addLog('warn', '📱 QR Code generated — buka dashboard dan scan WA');
-    io.emit('bot_update', { status: botStatus, qr: currentQR, ready: false });
-});
-
-client.on('loading_screen', (percent, message) => {
-    addLog('info', `Loading: ${percent}% — ${message}`);
-});
-
-client.on('authenticated', async (sessionData) => {
-    addLog('info', '✅ WhatsApp authenticated');
-    if (sessionData) await saveSessionToDB(sessionData);
-});
-
-client.on('auth_failure', (reason) => {
-    addLog('error', `❌ Auth failure: ${reason}`);
-    botStatus   = 'Auth Failed';
-    clientReady = false;
-    currentQR   = '';
-    io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
-});
-
-client.on('ready', () => {
-    botStatus   = 'Online';
-    clientReady = true;
-    currentQR   = '';
-    addLog('info', '🟢 WhatsApp client READY & Online');
-    io.emit('bot_update', { status: botStatus, qr: null, ready: true });
-    initSchedulers(client);
-});
-
-client.on('message', async (msg) => {
-    if (maintenanceMode && !msg.fromMe) {
-        await msg.reply('🛠️ Sistem sedang dalam perbaikan. Harap tunggu sebentar.').catch(() => {});
-        return;
-    }
-    try {
-        addLog('info', `MSG ← ${msg.from}`, { body: (msg.body || '').substring(0, 60) });
-        await handleMessage(msg, client);
-        io.emit('new_log', { from: msg.from, body: msg.body, timestamp: new Date().toISOString() });
-    } catch (err) {
-        addLog('error', `Message handler error: ${err.message}`);
-    }
-});
-
-client.on('disconnected', (reason) => {
-    botStatus   = 'Disconnected';
-    clientReady = false;
-    addLog('error', `🔴 Disconnected: ${reason}`);
-    io.emit('bot_update', { status: botStatus, ready: false });
-
-    // Auto reconnect setelah 5 detik
-    setTimeout(() => {
-        addLog('info', '🔄 Attempting to reconnect...');
-        client.initialize().catch(e => addLog('error', `Reconnect failed: ${e.message}`));
-    }, 5000);
-});
-
-// Start WA
-client.initialize().catch(e => addLog('error', `Initialize failed: ${e.message}`));
-
-// ════════════════════════════════════════════════════════════
-// AUTH MIDDLEWARE
-// ════════════════════════════════════════════════════════════
-const isAdmin = (req, res, next) => {
-    if (req.session?.authenticated) return next();
-    const wantsJSON = req.xhr ||
-        req.headers['accept']?.includes('application/json') ||
-        req.path.startsWith('/api/');
-    return wantsJSON
-        ? res.status(401).json({ error: 'Unauthorized' })
-        : res.redirect('/login');
-};
-
-// ════════════════════════════════════════════════════════════
-// PUBLIC ROUTES
-// ════════════════════════════════════════════════════════════
-app.get('/login', (req, res) => {
-    if (req.session?.authenticated) return res.redirect('/');
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
-});
-
 app.get('/ping', (req, res) => {
     res.status(200).json({ ok: true, ts: Date.now() });
 });
 
+// ════════════════════════════════════════════════════════════
+// HEALTH — Monitoring detail, TIDAK dipakai healthcheck
+// ════════════════════════════════════════════════════════════
 app.get('/health', async (req, res) => {
     const used = process.memoryUsage();
     let dbStatus = 'unknown';
     try {
         const { error } = await supabase.from('users').select('id').limit(1);
         dbStatus = error ? 'error' : 'connected';
-    } catch (_) {
-        dbStatus = 'error';
-    }
+    } catch (_) { dbStatus = 'error'; }
 
-    // ── Selalu 200 — Railway tidak boleh kill pod karena WA belum ready ──
+    // SELALU 200 — jangan biarkan Railway kill pod karena WA belum ready
     res.status(200).json({
-        status   : 'running',   // Server selalu "running" jika bisa respond
-        bot      : botStatus,   // Online / Scan QR / Initializing / Disconnected
+        status   : 'running',
+        bot      : botStatus,
         ready    : clientReady,
         timestamp: new Date().toISOString(),
         uptime   : Math.floor(process.uptime()),
@@ -304,23 +152,93 @@ app.get('/health', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════
+// AUTH MIDDLEWARE
+// ════════════════════════════════════════════════════════════
+const isAdmin = (req, res, next) => {
+    if (req.session?.authenticated) return next();
+    const wantsJSON = req.xhr ||
+        (req.headers['accept'] || '').includes('application/json') ||
+        req.path.startsWith('/api/');
+    return wantsJSON
+        ? res.status(401).json({ error: 'Unauthorized' })
+        : res.redirect('/login');
+};
+
+// ════════════════════════════════════════════════════════════
+// PUBLIC ROUTES
+// ════════════════════════════════════════════════════════════
+app.get('/login', (req, res) => {
+    if (req.session?.authenticated) return res.redirect('/');
+    const loginPath = path.join(__dirname, 'public', 'login.html');
+    if (fs.existsSync(loginPath)) {
+        return res.sendFile(loginPath);
+    }
+    // Fallback inline jika file tidak ada
+    res.send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — DompetKu</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body{background:#020617;color:#f8fafc}</style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-slate-800/70 backdrop-blur border border-slate-700 p-10 rounded-3xl shadow-2xl">
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-black text-green-500">DompetKu</h1>
+            <p class="text-slate-400 text-xs mt-2 uppercase tracking-widest">Admin Dashboard</p>
+        </div>
+        <div class="space-y-4">
+            <input type="text" id="u" placeholder="Username"
+                class="w-full bg-slate-900 border border-slate-600 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-green-500 transition">
+            <input type="password" id="p" placeholder="Password"
+                class="w-full bg-slate-900 border border-slate-600 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-green-500 transition">
+            <button onclick="doLogin()"
+                class="w-full bg-green-600 hover:bg-green-500 py-4 rounded-2xl font-bold transition shadow-lg">
+                Masuk ke Dashboard
+            </button>
+            <p id="err" class="hidden text-red-400 text-xs text-center font-bold pt-1">
+                USERNAME ATAU PASSWORD SALAH
+            </p>
+        </div>
+    </div>
+    <script>
+        document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+        async function doLogin() {
+            const res = await fetch('/admin/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value })
+            });
+            const data = await res.json();
+            if (data.success) window.location.href = '/';
+            else document.getElementById('err').classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>`);
+});
+
+// ════════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ════════════════════════════════════════════════════════════
 app.post('/admin/login', (req, res) => {
     const { username, password } = req.body;
-    // FIX: gunakan ADMIN_USERNAME & ADMIN_PASSWORD (bukan ADMIN_USER/ADMIN_PASS)
     const validUser = process.env.ADMIN_USERNAME || 'admin';
     const validPass = process.env.ADMIN_PASSWORD || 'admin123';
+
+    console.log(`[AUTH] Login attempt: "${username}" from ${req.ip}`);
 
     if (username === validUser && password === validPass) {
         req.session.authenticated = true;
         req.session.loginAt       = new Date().toISOString();
         addLog('info', `Admin login OK from ${req.ip}`);
-        res.json({ success: true });
-    } else {
-        addLog('warn', `Failed login: "${username}" from ${req.ip}`);
-        res.status(401).json({ success: false });
+        return res.json({ success: true });
     }
+
+    addLog('warn', `Failed login: "${username}" from ${req.ip}`);
+    res.status(401).json({ success: false });
 });
 
 app.post('/admin/logout', (req, res) => {
@@ -331,7 +249,11 @@ app.post('/admin/logout', (req, res) => {
 // PROTECTED ROUTES
 // ════════════════════════════════════════════════════════════
 app.get('/', isAdmin, (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+    }
+    res.send('<h1>DompetKu Dashboard</h1><p>index.html tidak ditemukan di folder public/</p>');
 });
 
 app.get('/api/admin/users', isAdmin, async (req, res) => {
@@ -352,7 +274,11 @@ app.get('/api/admin/users', isAdmin, async (req, res) => {
         if (error) throw error;
         res.json({
             users     : data || [],
-            pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
+            pagination: {
+                page, limit,
+                total     : count || 0,
+                totalPages: Math.ceil((count || 0) / limit),
+            },
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -370,9 +296,9 @@ app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
     try {
         const updates = {
             status,
-            upgrade_notified: false,
-            is_upgrading    : false,
-            upgrade_package : null,
+            upgrade_notified       : false,
+            is_upgrading           : false,
+            upgrade_package        : null,
             subscription_expires_at: status === 'pro'
                 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
                 : null,
@@ -381,13 +307,14 @@ app.post('/api/admin/user/:id/status', isAdmin, async (req, res) => {
         const { error } = await supabase.from('users').update(updates).eq('id', id);
         if (error) throw error;
 
-        if (clientReady) {
+        if (clientReady && waClient) {
             const notifs = {
                 demo     : 'ℹ️ Status akun Anda diubah ke DEMO (5 transaksi/hari).',
                 pro      : '🎉 Selamat! Akun PRO aktif 30 hari. ⭐',
                 unlimited: '💎 Selamat! Akun UNLIMITED aktif seumur hidup!',
             };
-            client.sendMessage(id, notifs[status]).catch(e => addLog('warn', `WA notif failed: ${e.message}`));
+            waClient.sendMessage(id, notifs[status])
+                .catch(e => addLog('warn', `WA notif failed: ${e.message}`));
         }
 
         addLog('info', `User ${id} → ${status}`);
@@ -414,7 +341,7 @@ app.post('/api/admin/maintenance', isAdmin, async (req, res) => {
 app.post('/api/admin/broadcast', isAdmin, async (req, res) => {
     const { message, target } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: 'Message diperlukan' });
-    if (!clientReady)     return res.status(503).json({ error: 'Bot belum online — scan QR dulu' });
+    if (!clientReady || !waClient) return res.status(503).json({ error: 'Bot belum online — scan QR dulu' });
 
     try {
         let query = supabase.from('users').select('id, store_name');
@@ -427,7 +354,6 @@ app.post('/api/admin/broadcast', isAdmin, async (req, res) => {
         activeBroadcasts.set(jobId, job);
         processBroadcast(jobId, users, message);
 
-        addLog('info', `Broadcast started → ${users.length} users [${target || 'all'}]`);
         res.json({ success: true, jobId, total: users.length });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -447,7 +373,7 @@ async function processBroadcast(jobId, users, message) {
             const text = message
                 .replace(/\{nama\}/gi, users[i].store_name)
                 .replace(/\{nama_toko\}/gi, users[i].store_name);
-            await client.sendMessage(users[i].id, text);
+            if (waClient) await waClient.sendMessage(users[i].id, text);
             job.sent++;
         } catch (_) { job.failed++; }
 
@@ -476,32 +402,23 @@ app.get('/api/admin/status', isAdmin, (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// SOCKET.IO — Gunakan sessionMiddleware yang sama
+// SOCKET.IO
 // ════════════════════════════════════════════════════════════
 io.use((socket, next) => {
     sessionMiddleware(socket.request, socket.request.res || {}, next);
 });
 
-io.use((socket, next) => {
-    // Izinkan semua koneksi — QR harus bisa ditampilkan sebelum login
-    next();
-});
-
 io.on('connection', (socket) => {
     const isAuth = socket.request.session?.authenticated;
-    addLog('info', `WS connected: ${socket.id} [${isAuth ? 'admin' : 'guest'}]`);
+    addLog('info', `WS: ${socket.id} [${isAuth ? 'admin' : 'guest'}]`);
 
-    // Kirim state saat ini ke client baru
     socket.emit('bot_update', { status: botStatus, qr: currentQR, ready: clientReady });
-
-    if (isAuth) {
-        socket.emit('logs_history', systemLogs.slice(0, 50));
-    }
+    if (isAuth) socket.emit('logs_history', systemLogs.slice(0, 50));
 
     socket.on('request_reconnect', () => {
         if (!clientReady) {
             addLog('info', 'Manual reconnect requested');
-            client.initialize().catch(e => addLog('error', `Reconnect failed: ${e.message}`));
+            initWhatsApp();
         }
     });
 
@@ -511,36 +428,212 @@ io.on('connection', (socket) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// GLOBAL ERROR HANDLERS
+// WHATSAPP INIT — Terpisah dari server start
+// ════════════════════════════════════════════════════════════
+const WA_SESSION_DIR = process.env.WA_SESSION_DIR || '/tmp/wa-session';
+
+// Pastikan folder session ada
+try {
+    if (!fs.existsSync(WA_SESSION_DIR)) {
+        fs.mkdirSync(WA_SESSION_DIR, { recursive: true });
+    }
+} catch (e) {
+    console.error('[WA] Gagal buat session dir:', e.message);
+}
+
+async function saveSessionToDB(sessionData) {
+    if (!sessionData) return;
+    try {
+        await supabase.from('wa_sessions').upsert({
+            id        : 'main',
+            data      : JSON.stringify(sessionData),
+            updated_at: new Date().toISOString(),
+        });
+    } catch (e) {
+        console.error('[WA-SESSION] Save failed:', e.message);
+    }
+}
+
+function initWhatsApp() {
+    addLog('info', '🔄 Inisialisasi WhatsApp...');
+    botStatus = 'Initializing';
+    io.emit('bot_update', { status: botStatus, qr: '', ready: false });
+
+    // Deteksi Chromium path
+    const chromiumPaths = [
+        process.env.PUPPETEER_EXEC_PATH,
+        '/run/current-system/sw/bin/chromium',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+    ].filter(Boolean);
+
+    let executablePath;
+    for (const p of chromiumPaths) {
+        if (fs.existsSync(p)) {
+            executablePath = p;
+            console.log(`[WA] Chromium found: ${p}`);
+            break;
+        }
+    }
+
+    if (!executablePath) {
+        addLog('warn', '⚠️ Chromium tidak ditemukan di path manapun — mencoba tanpa executablePath');
+    }
+
+    const client = new Client({
+        authStrategy: new LocalAuth({
+            dataPath: WA_SESSION_DIR,
+            clientId: 'dompetku',
+        }),
+        puppeteer: {
+            headless         : true,
+            executablePath   : executablePath || undefined,
+            args             : [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu',
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--disable-sync',
+                '--disable-translate',
+                '--hide-scrollbars',
+                '--mute-audio',
+                '--safebrowsing-disable-auto-update',
+                '--disable-features=TranslateUI',
+            ],
+            timeout: 120_000, // 120 detik untuk startup
+        },
+        restartOnAuthFail: true,
+        qrMaxRetries     : 10,
+    });
+
+    client.on('qr', async (qr) => {
+        botStatus   = 'Scan QR';
+        clientReady = false;
+        try { currentQR = await qrcodeWeb.toDataURL(qr); } catch (_) {}
+        addLog('warn', '📱 QR Code siap — buka dashboard dan scan');
+        io.emit('bot_update', { status: botStatus, qr: currentQR, ready: false });
+    });
+
+    client.on('loading_screen', (percent, message) => {
+        addLog('info', `WA Loading: ${percent}% — ${message}`);
+    });
+
+    client.on('authenticated', async (sessionData) => {
+        addLog('info', '🔐 WhatsApp authenticated');
+        if (sessionData) await saveSessionToDB(sessionData);
+    });
+
+    client.on('auth_failure', (reason) => {
+        addLog('error', `❌ Auth failure: ${reason}`);
+        botStatus   = 'Auth Failed';
+        clientReady = false;
+        currentQR   = '';
+        io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
+    });
+
+    client.on('ready', () => {
+        botStatus   = 'Online';
+        clientReady = true;
+        currentQR   = '';
+        waClient    = client;
+        addLog('info', '🟢 WhatsApp ONLINE');
+        io.emit('bot_update', { status: botStatus, qr: null, ready: true });
+
+        // Init schedulers SETELAH bot ready
+        try {
+            initSchedulers(client);
+        } catch (e) {
+            addLog('error', `Scheduler init failed: ${e.message}`);
+        }
+    });
+
+    client.on('message', async (msg) => {
+        if (maintenanceMode && !msg.fromMe) {
+            msg.reply('🛠️ Sistem sedang dalam perbaikan.').catch(() => {});
+            return;
+        }
+        try {
+            addLog('info', `MSG ← ${msg.from}`, { body: (msg.body || '').substring(0, 50) });
+            await handleMessage(msg, client);
+            io.emit('new_log', { from: msg.from, body: msg.body, timestamp: new Date().toISOString() });
+        } catch (err) {
+            addLog('error', `Message error: ${err.message}`);
+        }
+    });
+
+    client.on('disconnected', (reason) => {
+        botStatus   = 'Disconnected';
+        clientReady = false;
+        waClient    = null;
+        addLog('error', `🔴 WA Disconnected: ${reason}`);
+        io.emit('bot_update', { status: botStatus, ready: false });
+
+        // Auto-reconnect setelah 10 detik
+        setTimeout(() => {
+            addLog('info', '🔄 Auto-reconnect...');
+            initWhatsApp();
+        }, 10_000);
+    });
+
+    // Init dengan error handling yang tidak crash server
+    client.initialize().catch((err) => {
+        addLog('error', `WA initialize error: ${err.message}`);
+        botStatus   = 'Error';
+        clientReady = false;
+        io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
+
+        // Coba lagi setelah 30 detik
+        setTimeout(() => {
+            addLog('info', '🔄 Retry WA init setelah error...');
+            initWhatsApp();
+        }, 30_000);
+    });
+}
+
+// ════════════════════════════════════════════════════════════
+// GLOBAL ERROR HANDLERS — Jangan pernah crash process utama
 // ════════════════════════════════════════════════════════════
 process.on('uncaughtException', (err) => {
-    console.error(`[FATAL] uncaughtException: ${err.message}\n${err.stack}`);
+    console.error(`[FATAL] uncaughtException: ${err.message}`);
+    console.error(err.stack);
     addLog('error', `uncaughtException: ${err.message}`);
+    // TIDAK exit(1) — biarkan server tetap hidup
 });
 
 process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     console.error(`[FATAL] unhandledRejection: ${msg}`);
     addLog('error', `unhandledRejection: ${msg}`);
+    // TIDAK exit(1)
 });
 
 // ════════════════════════════════════════════════════════════
-// START SERVER (FIX: Health Check Priority)
+// START — Server DULU, WA BELAKANGAN
+// Ini kunci utama agar Railway healthcheck berhasil
 // ════════════════════════════════════════════════════════════
 server.listen(port, '0.0.0.0', () => {
-    console.log(`\n🚀 DompetKu HQ v2.0 — port ${port}`);
-    console.log(`   Dashboard : http://localhost:${port}/`);
-    console.log(`   Login     : http://localhost:${port}/login`);
-    console.log(`   Ping      : http://localhost:${port}/ping`);
-    console.log(`   Health    : http://localhost:${port}/health`);
-    console.log(`   Session   : ${pgPool ? 'PostgreSQL' : 'Memory'}`);
-    console.log(`   WA Dir    : ${WA_SESSION_DIR}\n`);
-    addLog('info', `Server started — port ${port}`);
+    console.log(`\n${'═'.repeat(50)}`);
+    console.log(`  🚀 DompetKu HQ v2.0 — listening on port ${port}`);
+    console.log(`  📍 Login    : http://localhost:${port}/login`);
+    console.log(`  📍 Dashboard: http://localhost:${port}/`);
+    console.log(`  📍 Ping     : http://localhost:${port}/ping`);
+    console.log(`  📍 Health   : http://localhost:${port}/health`);
+    console.log(`  💾 Session  : ${pgPool ? 'PostgreSQL ✅' : 'Memory ⚠️'}`);
+    console.log(`  📁 WA Dir   : ${WA_SESSION_DIR}`);
+    console.log(`${'═'.repeat(50)}\n`);
 
-    // Init WA SETELAH server listen agar /ping langsung bisa diakses Railway
-    console.log('[WA] Memulai inisialisasi WhatsApp...');
-    client.initialize().catch(e => {
-        addLog('error', `WA Initialize failed: ${e.message}`);
-        console.error('[WA] Initialize error:', e.message);
-    });
+    addLog('info', `Server started on port ${port}`);
+
+    // Init WA setelah server listen — Railway bisa hit /ping lebih dulu
+    setTimeout(() => {
+        initWhatsApp();
+    }, 2000); // Delay 2 detik untuk pastikan port terbind sempurna
 });
