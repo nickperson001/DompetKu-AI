@@ -80,6 +80,13 @@ function buildSessionMiddleware() {
 const sessionMiddleware = buildSessionMiddleware();
 
 // ════════════════════════════════════════════════════════════
+// TRUST PROXY — WAJIB untuk Railway/Heroku/Render
+// Tanpa ini: cookie secure tidak bisa di-set di balik reverse proxy
+// Akibat: session selalu hilang → login loop → dashboard tidak bisa dibuka
+// ════════════════════════════════════════════════════════════
+app.set('trust proxy', 1);
+
+// ════════════════════════════════════════════════════════════
 // MIDDLEWARE
 // ════════════════════════════════════════════════════════════
 app.use(sessionMiddleware);
@@ -132,6 +139,7 @@ app.get('/health', async (req, res) => {
 
     res.status(200).json({
         status   : 'running',
+        wa_ready: clientReady,
         bot      : botStatus,
         ready    : clientReady,
         timestamp: new Date().toISOString(),
@@ -535,7 +543,7 @@ server.listen(port, '0.0.0.0', (err) => {
     if (err) { console.error('[FATAL] Listen gagal:', err); process.exit(1); }
 
     console.log('\n' + '═'.repeat(52));
-    console.log(`  🚀 DompetKu HQ v2.0`);
+    console.log(`  🚀 Server on Running DompetKu`);
     console.log(`  📍 Port      : ${port}`);
     console.log(`  📍 Login     : http://localhost:${port}/login`);
     console.log(`  📍 Dashboard : http://localhost:${port}/`);
