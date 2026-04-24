@@ -18,6 +18,11 @@ const { initSchedulers } = require('./src/jobs/scheduler');
 const supabase           = require('./src/config/supabase');
 
 const app    = express();
+
+// Tambahkan ini agar session bisa disimpan saat menggunakan HTTPS/Proxy
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1); 
+}
 const server = http.createServer(app);
 const io     = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
@@ -94,7 +99,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Hanya expose /assets — index.html & login.html via route eksplisit
-app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
+app.use('/assets', express.static(path.join(__dirname, 'public', 'wwebjs_auth')));
 
 // ════════════════════════════════════════════════════════════
 // GLOBAL STATE
@@ -175,8 +180,9 @@ const isAdmin = (req, res, next) => {
 // PUBLIC ROUTES
 // ════════════════════════════════════════════════════════════
 app.get('/login', (req, res) => {
-    if (req.session && req.session.authenticated) return res.redirect('/');
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+    if (req.session.authenticated) return res.redirect('/');
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public/login.html'));
 });
 
 // ════════════════════════════════════════════════════════════
@@ -184,26 +190,20 @@ app.get('/login', (req, res) => {
 // ════════════════════════════════════════════════════════════
 app.post('/admin/login', (req, res) => {
     const { username, password } = req.body || {};
-
-    if (!username || !password) {
-        return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
-    }
-
-    // PENTING: env var harus ADMIN_USERNAME dan ADMIN_PASSWORD
     const validUser = process.env.ADMIN_USERNAME || 'admin';
     const validPass = process.env.ADMIN_PASSWORD || 'admin123';
 
-    console.log(`[AUTH] Login attempt: "${username}" dari ${req.ip}`);
-
     if (username === validUser && password === validPass) {
         req.session.authenticated = true;
-        req.session.loginAt       = new Date().toISOString();
-        addLog('info', `Admin login OK dari ${req.ip}`);
-        return res.json({ success: true });
+        
+        // Simpan dulu, baru kirim OK
+        req.session.save((err) => {
+            if (err) return res.status(500).json({ success: false });
+            return res.json({ success: true });
+        });
+    } else {
+        res.status(401).json({ success: false });
     }
-
-    addLog('warn', `Login gagal: "${username}" dari ${req.ip}`);
-    res.status(401).json({ success: false });
 });
 
 app.post('/admin/logout', (req, res) => {
@@ -558,4 +558,382 @@ server.listen(port, '0.0.0.0', (err) => {
     // WA init 3 detik setelah server ready
     // Railway hit /ping lebih dulu → healthcheck PASS → pod tidak di-kill
     setTimeout(() => initWhatsApp(), 3000);
+});
+// ════════════════════════════════════════════════════════════
+// STOCK DASHBOARD — PUBLIC USER ROUTES
+// ════════════════════════════════════════════════════════════
+const crypto = require('crypto');
+const stockManager = require('./src/utils/stockManager');
+
+// Serve dashboard page
+app.get('/stock/:userId', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'stock.html'));
+});
+
+// Token auth middleware untuk stock API
+const stockAuth = async (req, res, next) => {
+    const token  = req.query.token || req.headers['x-stock-token'];
+    // FIX: Express decodes req.params automatically, but extra safety for @c.us encoding
+    const userId = decodeURIComponent(req.params.userId || '');
+    if (!token || !userId) return res.status(401).json({ error: 'Token dan userId wajib' });
+
+    try {
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('id, store_name, status, dashboard_token')
+            .eq('id', userId)
+            .eq('dashboard_token', token)
+            .single();
+
+        if (error || !user) {
+            console.log(`[STOCK-AUTH] Gagal: userId="${userId}" token="${token?.substring(0,8)}..." error="${error?.message}"`);
+            return res.status(401).json({ error: 'Token tidak valid atau sudah kadaluarsa' });
+        }
+        req.stockUser = user;
+        req.stockUserId = userId;  // normalized userId
+        next();
+    } catch (e) {
+        res.status(401).json({ error: 'Auth gagal' });
+    }
+};
+
+// Verify token + return user info
+app.get('/api/stock/:userId/verify', stockAuth, (req, res) => {
+    const u = req.stockUser;
+    res.json({ id: u.id, store_name: u.store_name, status: u.status });
+});
+
+// Summary / overview stats
+app.get('/api/stock/:userId/summary', stockAuth, async (req, res) => {
+    const userId = req.params.userId;
+    try {
+        const { data: products } = await supabase
+            .from('products')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('is_active', true);
+
+        let totalValue = 0, lowStock = 0, outStock = 0;
+        const byCategory = {};
+
+        (products || []).forEach(p => {
+            const stock = parseFloat(p.stock_current) || 0;
+            const min   = parseFloat(p.stock_min) || 0;
+            const val   = stock * (parseFloat(p.price_buy) || 0);
+            totalValue += val;
+            if (stock <= 0) outStock++;
+            else if (stock <= min) lowStock++;
+
+            const cat = p.category || 'Umum';
+            if (!byCategory[cat]) byCategory[cat] = { count: 0, value: 0 };
+            byCategory[cat].count++;
+            byCategory[cat].value += val;
+        });
+
+        // Recent alerts
+        const { data: alertData } = await supabase
+            .from('stock_alerts')
+            .select('*, products(id, sku, name, unit, stock_current, stock_min)')
+            .eq('user_id', userId)
+            .is('resolved_at', null)
+            .order('alerted_at', { ascending: false })
+            .limit(10);
+
+        res.json({
+            total: (products || []).length,
+            active: (products || []).length,
+            totalValue,
+            lowStock,
+            outStock,
+            byCategory,
+            alerts: alertData || [],
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// List products
+app.get('/api/stock/:userId/products', stockAuth, async (req, res) => {
+    const userId = req.params.userId;
+    try {
+        const { data, error } = await supabase
+            .from('products')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('is_active', true)
+            .order('name', { ascending: true });
+
+        if (error) throw error;
+        res.json({ products: data || [] });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Add product
+app.post('/api/stock/:userId/products', stockAuth, async (req, res) => {
+    const userId = req.params.userId;
+    const { sku, name, category, unit, priceBuy, priceSell, stockInitial, stockMin, supplier, location, notes } = req.body;
+
+    try {
+        const result = await stockManager.addProduct(userId, {
+            sku, name, category, unit,
+            priceBuy   : parseFloat(priceBuy)     || 0,
+            priceSell  : parseFloat(priceSell)    || 0,
+            stockInitial: parseFloat(stockInitial) || 0,
+            stockMin   : parseFloat(stockMin)     || 0,
+            description: notes,
+        });
+
+        if (!result.success) return res.status(400).json({ error: result.error });
+
+        // Extra fields not in stockManager
+        if (supplier || location) {
+            await supabase.from('products').update({ supplier, location })
+                .eq('id', result.product.id);
+        }
+
+        addLog('info', `[STOCK-DASH] Produk baru: ${name} (${sku}) oleh ${userId}`);
+        res.json({ success: true, product: result.product });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Update product (non-stock fields only)
+app.put('/api/stock/:userId/products/:productId', stockAuth, async (req, res) => {
+    const { userId, productId } = req.params;
+    const { name, category, unit, price_buy, price_sell, stock_min, supplier, location, notes } = req.body;
+
+    try {
+        const { error } = await supabase
+            .from('products')
+            .update({
+                name, category, unit,
+                price_buy : parseFloat(price_buy)  || 0,
+                price_sell: parseFloat(price_sell) || 0,
+                stock_min : parseFloat(stock_min)  || 0,
+                supplier  : supplier || null,
+                location  : location || null,
+                notes     : notes || null,
+            })
+            .eq('id', productId)
+            .eq('user_id', userId);
+
+        if (error) throw error;
+        addLog('info', `[STOCK-DASH] Edit produk #${productId} oleh ${userId}`);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Delete product (soft)
+app.delete('/api/stock/:userId/products/:productId', stockAuth, async (req, res) => {
+    const { userId, productId } = req.params;
+    try {
+        const result = await stockManager.deleteProduct(userId, parseInt(productId));
+        if (!result.success) return res.status(400).json({ error: result.error });
+        addLog('info', `[STOCK-DASH] Hapus produk #${productId} oleh ${userId}`);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Record stock movement (in/out/adjustment)
+app.post('/api/stock/:userId/movement', stockAuth, async (req, res) => {
+    const userId = req.params.userId;
+    const { product_id, type, quantity, note, unit_price } = req.body;
+
+    if (!product_id || !type || !quantity) {
+        return res.status(400).json({ error: 'product_id, type, dan quantity wajib diisi' });
+    }
+    if (!['in','out','adjustment'].includes(type)) {
+        return res.status(400).json({ error: 'type harus: in, out, atau adjustment' });
+    }
+    if (parseFloat(quantity) <= 0) {
+        return res.status(400).json({ error: 'Jumlah harus lebih dari 0' });
+    }
+
+    try {
+        const result = await stockManager.adjustStock(userId, parseInt(product_id), type, parseFloat(quantity), {
+            referenceType: 'manual',
+            note,
+        });
+
+        if (!result.success) return res.status(400).json({ error: result.error });
+
+        // Update unit_price dan created_via di movement terbaru
+        if (unit_price) {
+            const { data: lastMov } = await supabase
+                .from('stock_movements')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('product_id', product_id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (lastMov) {
+                const totalVal = parseFloat(unit_price) * parseFloat(quantity);
+                await supabase.from('stock_movements')
+                    .update({ unit_price: parseFloat(unit_price), total_value: totalVal, created_via: 'dashboard' })
+                    .eq('id', lastMov.id);
+            }
+        } else {
+            // Mark as dashboard via
+            const { data: lastMov } = await supabase
+                .from('stock_movements')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('product_id', product_id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+            if (lastMov) {
+                await supabase.from('stock_movements')
+                    .update({ created_via: 'dashboard' })
+                    .eq('id', lastMov.id);
+            }
+        }
+
+        addLog('info', `[STOCK-DASH] Movement ${type} qty:${quantity} produk #${product_id} oleh ${userId}`);
+        res.json({ success: true, stockBefore: result.stockBefore, stockAfter: result.stockAfter });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Movement history (with pagination + filter)
+app.get('/api/stock/:userId/movements', stockAuth, async (req, res) => {
+    const userId   = req.params.userId;
+    const limit    = Math.min(100, parseInt(req.query.limit) || 30);
+    const page     = Math.max(1, parseInt(req.query.page)  || 1);
+    const prodId   = req.query.product_id;
+    const type     = req.query.type;
+
+    try {
+        let query = supabase
+            .from('stock_movements')
+            .select('*, products(id, sku, name, unit)', { count: 'exact' })
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .range((page - 1) * limit, page * limit - 1);
+
+        if (prodId) query = query.eq('product_id', prodId);
+        if (type)   query = query.eq('type', type);
+        if (req.query.via) query = query.eq('created_via', req.query.via);
+
+        const { data, error, count } = await query;
+        if (error) throw error;
+        res.json({ movements: data || [], total: count || 0, page, limit });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+
+// Stock report endpoint
+app.get('/api/stock/:userId/report', stockAuth, async (req, res) => {
+    const userId = decodeURIComponent(req.params.userId);
+    const days   = Math.min(365, parseInt(req.query.days) || 30);
+    const since  = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    try {
+        // Movements in period
+        const { data: movs } = await supabase
+            .from('stock_movements')
+            .select('*, products(id, name, sku, unit)')
+            .eq('user_id', userId)
+            .gte('created_at', since)
+            .order('created_at', { ascending: false });
+
+        let totalIn = 0, totalOut = 0, totalAdj = 0, count = (movs||[]).length;
+        const outByProduct = {};
+
+        (movs || []).forEach(m => {
+            const val = parseFloat(m.quantity) * (parseFloat(m.unit_price) || 0);
+            if (m.type === 'in')         totalIn  += val;
+            else if (m.type === 'out')   totalOut += val;
+            else if (m.type === 'adjustment') totalAdj++;
+
+            if (m.type === 'out' && m.products) {
+                const key = m.product_id;
+                if (!outByProduct[key]) outByProduct[key] = { ...m.products, total: 0 };
+                outByProduct[key].total += parseFloat(m.quantity);
+            }
+        });
+
+        // Top products by out quantity
+        const maxOut = Math.max(...Object.values(outByProduct).map(p=>p.total), 1);
+        const topOut = Object.values(outByProduct)
+            .sort((a,b) => b.total - a.total)
+            .slice(0, 8)
+            .map(p => ({ ...p, pct: Math.round((p.total/maxOut)*100) }));
+
+        // By category (current stock value)
+        const { data: products } = await supabase
+            .from('products').select('*').eq('user_id', userId).eq('is_active', true);
+
+        const byCategory = {};
+        (products||[]).forEach(p => {
+            const cat = p.category || 'Umum';
+            const val = parseFloat(p.stock_current) * parseFloat(p.price_buy);
+            if (!byCategory[cat]) byCategory[cat] = { count: 0, value: 0 };
+            byCategory[cat].count++;
+            byCategory[cat].value += val;
+        });
+
+        res.json({ totalIn, totalOut, totalAdj, count, topOut, byCategory });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════
+// ADMIN: Generate dashboard token untuk user
+// ════════════════════════════════════════════════════════════
+app.post('/api/admin/user/:id/dashboard-token', isAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const token = crypto.randomBytes(16).toString('hex');
+        const { error } = await supabase
+            .from('users')
+            .update({ dashboard_token: token, dashboard_token_created_at: new Date().toISOString() })
+            .eq('id', id);
+        if (error) throw error;
+
+        // Kirim link ke user via WA
+        if (clientReady && waClient) {
+            const appUrl = process.env.APP_URL || `https://your-app.railway.app`;
+            const link   = `${appUrl}/stock/${id}?token=${token}`;
+            waClient.sendMessage(id, `📦 *Dashboard Stok Anda*\n\nAkses dashboard stok di:\n${link}\n\n⚠️ Jaga kerahasiaan link ini. Ketik *Token baru* jika link bermasalah.`)
+                .catch(e => addLog('warn', `WA token send failed: ${e.message}`));
+        }
+
+        addLog('info', `Dashboard token generated for ${id}`);
+        res.json({ success: true, token });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// User request token baru via WA (dipanggil dari message.js)
+app.post('/api/internal/generate-token/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const { secret } = req.body;
+    if (secret !== (process.env.INTERNAL_SECRET || 'dompetku-internal')) {
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    try {
+        const token = crypto.randomBytes(16).toString('hex');
+        await supabase.from('users')
+            .update({ dashboard_token: token, dashboard_token_created_at: new Date().toISOString() })
+            .eq('id', userId);
+        res.json({ success: true, token });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });

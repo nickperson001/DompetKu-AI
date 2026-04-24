@@ -18,10 +18,21 @@
         </div>
 
         <form id="loginForm" class="space-y-4">
-            <input type="text" id="username" placeholder="Username" required 
-                class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
-            <input type="password" id="password" placeholder="Password" required 
-                class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
+                <input 
+    type="text" 
+    id="username" 
+    placeholder="Username" 
+    autocomplete="username" 
+    required 
+    class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
+
+<input 
+    type="password" 
+    id="password" 
+    placeholder="Password" 
+    autocomplete="current-password" 
+    required 
+    class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
             
             <button type="submit" id="btn" class="w-full bg-green-600 hover:bg-green-500 py-4 rounded-2xl font-bold transition-all shadow-lg shadow-green-900/30">
                 Masuk ke Dashboard
@@ -32,19 +43,39 @@
 
     <script>
         document.getElementById('loginForm').onsubmit = async (e) => {
-            e.preventDefault();
-            const res = await fetch('/admin/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: document.getElementById('username').value,
-                    password: document.getElementById('password').value
-                })
-            });
-            const data = await res.json();
-            if (data.success) window.location.href = '/';
-            else document.getElementById('err').classList.remove('hidden');
-        };
+    e.preventDefault();
+    const btn = document.getElementById('btn');
+    const err = document.getElementById('err');
+    
+    btn.disabled = true;
+    btn.innerText = 'Checking...';
+
+    try {
+        const res = await fetch('/admin/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value
+            })
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+            // INI BAGIAN PALING PENTING:
+            window.location.href = '/'; 
+        } else {
+            err.classList.remove('hidden');
+            btn.disabled = false;
+            btn.innerText = 'Masuk ke Dashboard';
+        }
+    } catch (e) {
+        console.error(e);
+        alert('Server mati atau koneksi bermasalah');
+        btn.disabled = false;
+    }
+};
     </script>
 </body>
 </html>

@@ -500,7 +500,15 @@ async function checkStockAlerts(client) {
                     }
                 });
                 
-                msg += `Ketik *Stock list* untuk lihat semua produk.`;
+                const appUrl = process.env.APP_URL || 'https://your-app.railway.app';
+                // Get user token for dashboard link
+                const { data: uToken } = await supabase.from('users').select('dashboard_token').eq('id', userId).single();
+                if (uToken?.dashboard_token) {
+                    const dashLink = `${appUrl}/stock/${userId}?token=${uToken.dashboard_token}`;
+                    msg += `📊 Kelola stok di:\n${dashLink}`;
+                } else {
+                    msg += `Ketik *Dashboard* di WA untuk akses portal stok.`;
+                }
                 
                 await client.sendMessage(userId, msg);
                 sent++;
