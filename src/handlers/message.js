@@ -63,7 +63,7 @@ const PACKAGES = {
         features : [
             'Transaksi tanpa batas per hari',
             'Laporan mingguan otomatis',
-            'Stock opname lengkap (unlimited produk)',
+            'Dashboard web stok (tambah/kurang/opname)',
             'Alert stock minimum otomatis',
             'Berlaku 30 hari, bisa diperpanjang',
         ],
@@ -78,7 +78,7 @@ const PACKAGES = {
         features : [
             'Transaksi tanpa batas per hari',
             'Semua laporan otomatis (harian, mingguan, bulanan)',
-            'Stock opname enterprise (unlimited produk)',
+            'Dashboard web stok enterprise (unlimited produk)',
             'Alert stock + rekomendasi restock',
             'Berlaku SEUMUR HIDUP — tidak perlu perpanjang',
             'Prioritas support admin',
@@ -395,76 +395,6 @@ const KW_DASHBOARD = [
 // STOCK HANDLERS
 // ════════════════════════════════════════════════════════════
 
-async function handleStockAdd(msg, user, rawBody, body) {
-    // Format: tambah produk SKU-001 nama beras unit kg harga beli 10000 harga jual 12000 stock 100 min 10
-    const parts = rawBody.split(/\s+/);
-    
-    if (parts.length < 4) {
-        return safeReply(msg,
-            `📦 *Tambah Produk Baru*\n\n` +
-            `Format:\n` +
-            `*Tambah produk [SKU] [Nama] unit [satuan] beli [harga] jual [harga] stock [qty] min [qty]*\n\n` +
-            `Contoh:\n` +
-            `Tambah produk BRS-01 Beras Premium unit kg beli 10000 jual 12000 stock 100 min 10\n\n` +
-            `Unit: kg, pcs, liter, box, dll\n` +
-            `Stock & min: opsional`
-        ), true;
-    }
-    
-    // Parse data
-    const data = {
-        sku         : parts[2],
-        name        : '',
-        unit        : 'pcs',
-        priceBuy    : 0,
-        priceSell   : 0,
-        stockInitial: 0,
-        stockMin    : 0,
-        category    : 'Umum',
-    };
-    
-    let nameEnd = parts.indexOf('unit');
-    if (nameEnd === -1) nameEnd = parts.indexOf('beli');
-    if (nameEnd === -1) nameEnd = parts.indexOf('stock');
-    
-    if (nameEnd > 3) {
-        data.name = parts.slice(3, nameEnd).join(' ');
-    }
-    
-    // Parse keywords
-    for (let i = 0; i < parts.length; i++) {
-        const w = parts[i].toLowerCase();
-        if (w === 'unit' && parts[i + 1]) data.unit = parts[i + 1];
-        if (w === 'beli' && parts[i + 1]) data.priceBuy = parseCurrency(parts[i + 1]);
-        if (w === 'jual' && parts[i + 1]) data.priceSell = parseCurrency(parts[i + 1]);
-        if (w === 'stock' && parts[i + 1]) data.stockInitial = parseFloat(parts[i + 1]);
-        if (w === 'min' && parts[i + 1]) data.stockMin = parseFloat(parts[i + 1]);
-        if (w === 'kategori' && parts[i + 1]) data.category = parts[i + 1];
-    }
-    
-    if (!data.name) {
-        return safeReply(msg, '❌ Nama produk wajib diisi.'), true;
-    }
-    
-    const result = await stockManager.addProduct(user.id, data);
-    
-    if (!result.success) {
-        return safeReply(msg, `❌ ${result.error}`), true;
-    }
-    
-    return safeReply(msg,
-        `✅ *Produk Berhasil Ditambahkan!*\n\n` +
-        `📦 SKU     : ${result.product.sku}\n` +
-        `📝 Nama    : ${result.product.name}\n` +
-        `📊 Satuan  : ${result.product.unit}\n` +
-        `💵 Beli    : ${formatRupiah(result.product.price_buy)}\n` +
-        `💰 Jual    : ${formatRupiah(result.product.price_sell)}\n` +
-        `📦 Stock   : ${stockManager.formatQty(result.product.stock_current, result.product.unit)} ${result.product.unit}\n` +
-        `⚠️ Min     : ${stockManager.formatQty(result.product.stock_min, result.product.unit)} ${result.product.unit}\n\n` +
-        `Ketik *Stock list* untuk lihat semua produk.`
-    ), true;
-}
-
 async function handleStockList(msg, user) {
     const result = await stockManager.listProducts(user.id, { active: true });
     
@@ -493,7 +423,7 @@ async function handleStockList(msg, user) {
         text += `   Jual: ${formatRupiah(p.price_sell)}\n\n`;
     });
     
-    text += `Ketik *Stock info [SKU]* untuk detail produk.\nAtau ketik *Dashboard* untuk kelola via web.`;
+    text += `Ketik *Stock info [SKU]* untuk detail produk.\nKetik *Dashboard* untuk kelola stok via web (tambah/kurang/opname).`;
     
     return safeReply(msg, text), true;
 }
@@ -543,95 +473,6 @@ async function handleStockInfo(msg, user, rawBody) {
     ), true;
 }
 
-async function handleStockIn(msg, user, rawBody, body) {
-    // Format: masuk BRS-01 50 atau masuk BRS-01 50kg catatan pembelian baru
-    const parts = rawBody.split(/\s+/);
-    
-    if (parts.length < 3) {
-        return safeReply(msg, `❌ Format: *Masuk [SKU] [jumlah] [catatan]*\n\nContoh: Masuk BRS-01 50`), true;
-    }
-    
-    const sku = parts[1];
-    const qty = parseQuantity(parts[2]) || parseCurrency(parts[2]);
-    
-    if (!qty || qty <= 0) {
-        return safeReply(msg, `❌ Jumlah tidak valid: "${parts[2]}"`), true;
-    }
-    
-    const note = parts.slice(3).join(' ') || null;
-    
-    // Get product
-    const prodResult = await stockManager.getProduct(user.id, sku);
-    if (!prodResult.success) {
-        return safeReply(msg, `❌ Produk "${sku}" tidak ditemukan.\n\nKetik *Stock list* untuk lihat semua produk.`), true;
-    }
-    
-    const product = prodResult.product;
-    
-    // Adjust stock
-    const result = await stockManager.adjustStock(user.id, product.id, 'in', qty, {
-        referenceType: 'manual',
-        note,
-    });
-    
-    if (!result.success) {
-        return safeReply(msg, `❌ ${result.error}`), true;
-    }
-    
-    return safeReply(msg,
-        `✅ *Stock Masuk Berhasil!*\n\n` +
-        `📦 ${product.name} (${product.sku})\n` +
-        `➕ Masuk   : ${stockManager.formatQty(qty, product.unit)} ${product.unit}\n` +
-        `📊 Sebelum : ${stockManager.formatQty(result.stockBefore, product.unit)} ${product.unit}\n` +
-        `📊 Sekarang: ${stockManager.formatQty(result.stockAfter, product.unit)} ${product.unit}\n` +
-        (note ? `\n📝 ${note}` : '')
-    ), true;
-}
-
-async function handleStockOut(msg, user, rawBody, body) {
-    // Format: keluar BRS-01 10
-    const parts = rawBody.split(/\s+/);
-    
-    if (parts.length < 3) {
-        return safeReply(msg, `❌ Format: *Keluar [SKU] [jumlah] [catatan]*\n\nContoh: Keluar BRS-01 10`), true;
-    }
-    
-    const sku = parts[1];
-    const qty = parseQuantity(parts[2]) || parseCurrency(parts[2]);
-    
-    if (!qty || qty <= 0) {
-        return safeReply(msg, `❌ Jumlah tidak valid: "${parts[2]}"`), true;
-    }
-    
-    const note = parts.slice(3).join(' ') || null;
-    
-    // Get product
-    const prodResult = await stockManager.getProduct(user.id, sku);
-    if (!prodResult.success) {
-        return safeReply(msg, `❌ Produk "${sku}" tidak ditemukan.`), true;
-    }
-    
-    const product = prodResult.product;
-    
-    // Adjust stock
-    const result = await stockManager.adjustStock(user.id, product.id, 'out', qty, {
-        referenceType: 'manual',
-        note,
-    });
-    
-    if (!result.success) {
-        return safeReply(msg, `❌ ${result.error}`), true;
-    }
-    
-    return safeReply(msg,
-        `✅ *Stock Keluar Berhasil!*\n\n` +
-        `📦 ${product.name} (${product.sku})\n` +
-        `➖ Keluar  : ${stockManager.formatQty(qty, product.unit)} ${product.unit}\n` +
-        `📊 Sebelum : ${stockManager.formatQty(result.stockBefore, product.unit)} ${product.unit}\n` +
-        `📊 Sekarang: ${stockManager.formatQty(result.stockAfter, product.unit)} ${product.unit}\n` +
-        (note ? `\n📝 ${note}` : '')
-    ), true;
-}
 
 async function handleStockReport(msg, user) {
     const result = await stockManager.generateStockReport(user.id);
@@ -810,20 +651,22 @@ async function handleDashboardRequest(msg, sender, user) {
     const link = `${appUrl}/stock/${sender}?token=${token}`;
 
     return safeReply(msg,
-        `📦 *Dashboard Stok - ${user.store_name}*\n\n` +
-        `Kelola stok Anda secara visual di:\n` +
+        `📊 *Dashboard Stok — ${user.store_name}*\n` +
+        `_Tata Business Suite_\n\n` +
+        `Akses dashboard stok Anda di sini:\n` +
         `🔗 ${link}\n\n` +
-        `✅ Yang bisa dilakukan di dashboard:\n` +
-        `   • Tambah, edit, hapus produk\n` +
+        `✅ *Fitur dashboard:*\n` +
+        `   • Tambah, edit & hapus produk\n` +
         `   • Catat stok masuk & keluar\n` +
-        `   • Lihat riwayat lengkap\n` +
-        `   • Laporan nilai inventori\n\n` +
-        `⚠️ Simpan link ini. Ketik *Token baru* untuk generate link baru.`
+        `   • Stock opname (hitung fisik)\n` +
+        `   • Laporan & riwayat lengkap\n\n` +
+        `⚠️ Jaga kerahasiaan link ini.\n` +
+        `Ketik *Token baru* jika link bermasalah.`
     ), true;
 }
 
 async function handleNewToken(msg, sender, user) {
-    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    const appUrl = process.env.APP_URL || 'dompetku-ai-production.up.railway.app';
     const token = crypto.randomBytes(16).toString('hex');
     await supabase.from('users')
         .update({
@@ -835,10 +678,10 @@ async function handleNewToken(msg, sender, user) {
     const link = `${appUrl}/stock/${sender}?token=${token}`;
 
     return safeReply(msg,
-        `🔑 *Link Dashboard Baru*\n\n` +
+        `🔑 *Link Dashboard Baru — Tata Business Suite*\n\n` +
         `Link lama sudah tidak berlaku.\n\n` +
-        `Link baru:\n🔗 ${link}\n\n` +
-        `Simpan link ini dengan baik.`
+        `Link baru Anda:\n🔗 ${link}\n\n` +
+        `Simpan link ini. Jangan bagikan ke orang lain.`
     ), true;
 }
 
@@ -897,23 +740,70 @@ async function handleMessage(msg, client) {
         msg.getChat().then(c => c.sendStateTyping()).catch(() => {});
         const effectiveStatus = getEffectiveStatus(user);
 
-        // ── Media Processing (Voice & Image) ──
+        // ── Media Processing (Voice Note & Foto Struk) ──────────
+        // Hanya proses jika user tidak sedang dalam flow upgrade
         if (!user.is_upgrading && msg.hasMedia) {
-            try {
-                const media = await msg.downloadMedia().catch(() => null);
-                if (media) {
-                    let extractedText = '';
-                    if (media.mimetype.startsWith('audio/')) extractedText = await transcribeAudio(media);
-                    else if (media.mimetype.startsWith('image/')) extractedText = await extractTextFromImage(media);
+            const mime = (msg.type || '').toLowerCase();
+            const isAudio = mime === 'ptt' || mime === 'audio'; // ptt = push-to-talk / voice note WA
+            const isImage = mime === 'image';
 
-                    if (extractedText && extractedText.trim().length > 3) {
-                        const mockMsg = { reply: async (t) => safeReply(msg, t) };
-                        const txHandled = await handleTransaction(mockMsg, sender, user, effectiveStatus, extractedText, extractedText.toLowerCase());
-                        if (txHandled) return;
+            if (isAudio || isImage) {
+                // Kirim feedback loading dulu agar user tidak menunggu tanpa respons
+                const loadingMsg = isAudio
+                    ? '🎙️ Sedang transkripsi suara... sebentar ya Bos.'
+                    : '📸 Sedang memindai struk... sebentar ya Bos.';
+
+                await safeReply(msg, loadingMsg);
+
+                try {
+                    const media = await msg.downloadMedia().catch(() => null);
+
+                    if (!media) {
+                        await safeReply(msg, '❌ Gagal mengunduh file. Coba kirim ulang ya Bos.');
+                    } else {
+                        let result = null;
+
+                        if (isAudio) {
+                            result = await transcribeAudio(media);
+                        } else {
+                            result = await extractTextFromImage(media);
+                        }
+
+                        if (!result.success) {
+                            // Error yang informatif berdasarkan tipe
+                            const errMsg = isAudio
+                                ? `❌ *Gagal memproses voice note*\n\n${result.error}\n\nCoba ketik pesannya langsung ya Bos.`
+                                : `❌ *Gagal memindai struk*\n\n${result.error}\n\nTips:\n• Foto harus terang & tidak buram\n• Arahkan kamera tegak lurus\n• Pastikan tulisan terbaca jelas`;
+                            await safeReply(msg, errMsg);
+                        } else if (!result.hasTransaction || result.confidence < 25) {
+                            // Teks berhasil diambil tapi tidak ada info transaksi
+                            const preview = result.text.substring(0, 120).replace(/\n/g, ' ');
+                            const hint = isAudio
+                                ? `💬 Terdengar: "_${preview}..._"\n\nSaya tidak mendeteksi transaksi keuangan di sana Bos. Coba sebut nominalnya dengan jelas, contoh: "jual kopi lima puluh ribu".`
+                                : `📄 Teks terdeteksi: "_${preview}..._"\n\nSaya tidak menemukan info transaksi di struk ini Bos. Coba ketik manual, contoh: *Jual 150rb*.`;
+                            await safeReply(msg, hint);
+                        } else {
+                            // Ada transaksi — proses seperti pesan teks biasa
+                            const txHandled = await handleTransaction(
+                                msg, sender, user, effectiveStatus,
+                                result.text, result.text.toLowerCase()
+                            );
+                            if (!txHandled) {
+                                // Teks ada tapi parser tidak menemukan pola transaksi
+                                const preview = result.text.substring(0, 100).replace(/\n/g, ' ');
+                                await safeReply(msg,
+                                    `📋 *Teks berhasil dibaca:*\n${preview}\n\nTapi saya belum bisa otomatis mencatat transaksinya Bos.\nCoba ketik manual: *Jual 150rb* atau *Beli bahan 75rb*`
+                                );
+                            }
+                        }
                     }
+                } catch (err) {
+                    console.error(`[MEDIA] Unhandled error: ${err.message}\n${err.stack}`);
+                    await safeReply(msg,
+                        `⚠️ Ada gangguan saat memproses ${isAudio ? 'voice note' : 'foto'} Bos.\nCoba kirim ulang, atau ketik pesannya langsung.`
+                    );
                 }
-            } catch (err) {
-                console.error(`[MEDIA] Gagal proses: ${err.message}`);
+                return; // Selalu return setelah handle media — jangan proses sebagai teks
             }
         }
 
@@ -1109,7 +999,7 @@ Contoh: *Beli kain 1.5jt*
         if (txHandled) return;
 
         // ── CATCH-ALL ──
-        return safeReply(msg, `Halo Bos *${user.store_name}*! 👋\n\nMaaf, saya belum paham maksud Bos. 😅\n\nYang bisa saya bantu:\n📝 *Jual kopi 15rb* — catat pemasukan\n📝 *Beli gula 20rb* — catat pengeluaran\n📚 *Bantuan* — lihat semua panduan\n📊 *Laporan* — lihat rekap hari ini`);
+        return safeReply(msg, `Halo Bos *${user.store_name}*! 👋\n_Tata Business Suite_\n\nMaaf, saya belum paham maksud Bos. 😅\n\nYang bisa saya bantu:\n📝 *Jual kopi 15rb* — catat pemasukan\n📝 *Beli gula 20rb* — catat pengeluaran\n📦 *Stock list* — lihat stok produk\n🌐 *Dashboard* — kelola stok via web\n📚 *Bantuan* — lihat semua panduan`);
 
     } catch (err) {
     console.error('FULL ERROR:', {

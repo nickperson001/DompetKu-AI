@@ -25,25 +25,22 @@ async function acquireLock(jobName, durationMinutes = 5) {
         const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
         
         // Try to acquire DB lock
-        const { data, error } = await supabase
-            .from('scheduler_locks')
-            .upsert({
-                job_name  : jobName,
-                locked_at : new Date().toISOString(),
-                locked_by : INSTANCE_ID,
-                expires_at: expiresAt.toISOString(),
-            }, {
-                onConflict: 'job_name',
-                ignoreDuplicates: false,
-            })
-            .select()
-            .single();
-        
-        if (error) {
-            // Lock exists and not expired
-            console.log(`[LOCK] ${jobName} locked by another instance`);
-            return false;
-        }
+const { data, error } = await supabase
+    .from('scheduler_locks')
+    .insert([{
+        job_name  : jobName,
+        locked_at : new Date().toISOString(),
+        locked_by : INSTANCE_ID,
+        expires_at: expiresAt.toISOString(),
+    }])
+    .select()
+    .single();
+
+if (error) {
+    // Jika error duplikat, berarti lock sedang dipegang server lain
+    console.log(`[LOCK] ${jobName} locked by another instance`);
+    return false;
+}
         
         // Check if we got the lock (not expired and owned by us)
         if (data && data.locked_by === INSTANCE_ID) {
@@ -500,7 +497,7 @@ async function checkStockAlerts(client) {
                     }
                 });
                 
-                const appUrl = process.env.APP_URL || 'https://your-app.railway.app';
+                const appUrl = process.env.APP_URL || 'dompetku-ai-production.up.railway.app';
                 // Get user token for dashboard link
                 const { data: uToken } = await supabase.from('users').select('dashboard_token').eq('id', userId).single();
                 if (uToken?.dashboard_token) {

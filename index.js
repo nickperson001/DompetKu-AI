@@ -18,11 +18,6 @@ const { initSchedulers } = require('./src/jobs/scheduler');
 const supabase           = require('./src/config/supabase');
 
 const app    = express();
-
-// Tambahkan ini agar session bisa disimpan saat menggunakan HTTPS/Proxy
-if (process.env.NODE_ENV === 'production') {
-    app.set('trust proxy', 1); 
-}
 const server = http.createServer(app);
 const io     = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
@@ -51,7 +46,7 @@ if (process.env.DATABASE_URL) {
 
 function buildSessionMiddleware() {
     const base = {
-        secret           : process.env.SESSION_SECRET || 'dompetku-secret-32chars-ganti-ini!',
+        secret           : process.env.SESSION_SECRET || 'tbs-secret-32chars-ganti-ini!',
         resave           : false,
         saveUninitialized: false,
         cookie: {
@@ -99,7 +94,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Hanya expose /assets — index.html & login.html via route eksplisit
-app.use('/assets', express.static(path.join(__dirname, 'public', 'wwebjs_auth')));
+app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
 
 // ════════════════════════════════════════════════════════════
 // GLOBAL STATE
@@ -367,13 +362,28 @@ io.on('connection', (socket) => {
     const isAuth = socket.request.session?.authenticated;
     addLog('info', `WS: ${socket.id} [${isAuth ? 'admin' : 'guest'}]`);
 
-    socket.emit('bot_update', { status: botStatus, qr: currentQR, ready: clientReady });
+    // ✅ FIX: Kirim state terkini segera saat client connect
+    // Jika QR tersedia → langsung tampilkan
+    // Jika sudah ready → konfirmasi status online
+    socket.emit('bot_update', {
+        status: botStatus,
+        qr    : clientReady ? null : currentQR,  // QR hanya jika belum terhubung
+        ready : clientReady,
+    });
+
     if (isAuth) socket.emit('logs_history', systemLogs.slice(0, 50));
 
     socket.on('request_reconnect', () => {
         if (!clientReady) {
             addLog('info', 'Manual reconnect diminta');
+            // Reset state dulu sebelum reinit
+            botStatus = 'Reconnecting';
+            currentQR = '';
+            io.emit('bot_update', { status: botStatus, qr: '', ready: false });
             initWhatsApp();
+        } else {
+            // Sudah terhubung — konfirmasi ke client yang baru connect
+            socket.emit('bot_update', { status: 'Online', qr: null, ready: true });
         }
     });
 
@@ -387,7 +397,7 @@ io.on('connection', (socket) => {
 // ════════════════════════════════════════════════════════════
 // Volume Railway di-mount ke /.wwebjs_auth — gunakan itu agar
 // session WA tidak hilang saat redeploy
-const WA_SESSION_DIR = process.env.WA_SESSION_DIR || '/.wwebjs_auth';
+const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '.wwebjs_auth'); // ✅ FIX: relative path
 
 try {
     if (!fs.existsSync(WA_SESSION_DIR)) {
@@ -436,7 +446,7 @@ function initWhatsApp() {
     const client = new Client({
         authStrategy: new LocalAuth({
             dataPath: WA_SESSION_DIR,
-            clientId: 'dompetku',
+            clientId: 'tbs',
         }),
         puppeteer: {
             headless      : true,
@@ -511,14 +521,18 @@ function initWhatsApp() {
         botStatus = 'Disconnected'; clientReady = false; waClient = null;
         addLog('error', `🔴 WA Terputus: ${reason}`);
         io.emit('bot_update', { status: botStatus, ready: false });
-        setTimeout(() => { addLog('info', '🔄 Auto-reconnect...'); initWhatsApp(); }, 10_000);
+        currentQR = '';
+        io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
+        // ✅ FIX: reconnect 3 detik, lebih cepat
+        setTimeout(() => { addLog('info', '🔄 Auto-reconnect...'); initWhatsApp(); }, 3_000);
     });
 
     client.initialize().catch((err) => {
         addLog('error', `WA init error: ${err.message}`);
         botStatus = 'Error'; clientReady = false; waClient = null;
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
-        setTimeout(() => { addLog('info', '🔄 Retry WA init...'); initWhatsApp(); }, 30_000);
+        // ✅ FIX: retry lebih cepat 15 detik
+        setTimeout(() => { addLog('info', '🔄 Retry WA init...'); initWhatsApp(); }, 15_000);
     });
 }
 
@@ -543,12 +557,12 @@ server.listen(port, '0.0.0.0', (err) => {
     if (err) { console.error('[FATAL] Listen gagal:', err); process.exit(1); }
 
     console.log('\n' + '═'.repeat(52));
-    console.log(`  🚀 Server on Running DompetKu`);
+    console.log(`  🚀 Server on Running Tata Business Suite`);
     console.log(`  📍 Port      : ${port}`);
-    console.log(`  📍 Login     : http://localhost:${port}/login`);
-    console.log(`  📍 Dashboard : http://localhost:${port}/`);
-    console.log(`  📍 Ping      : http://localhost:${port}/ping`);
-    console.log(`  📍 Health    : http://localhost:${port}/health`);
+    console.log(`  📍 Login     : dompetku-ai-production.up.railway.app/login`);
+    console.log(`  📍 Dashboard : dompetku-ai-production.up.railway.app/`);
+    console.log(`  📍 Ping      : dompetku-ai-production.up.railway.app/ping`);
+    console.log(`  📍 Health    : dompetku-ai-production.up.railway.app/health`);
     console.log(`  💾 Session   : ${pgPool ? 'PostgreSQL ✅' : 'Memory ⚠️'}`);
     console.log(`  📁 WA Dir    : ${WA_SESSION_DIR}`);
     console.log('═'.repeat(52) + '\n');
@@ -907,7 +921,7 @@ app.post('/api/admin/user/:id/dashboard-token', isAdmin, async (req, res) => {
 
         // Kirim link ke user via WA
         if (clientReady && waClient) {
-            const appUrl = process.env.APP_URL || `https://your-app.railway.app`;
+            const appUrl = process.env.APP_URL || `dompetku-ai-production.up.railway.app`;
             const link   = `${appUrl}/stock/${id}?token=${token}`;
             waClient.sendMessage(id, `📦 *Dashboard Stok Anda*\n\nAkses dashboard stok di:\n${link}\n\n⚠️ Jaga kerahasiaan link ini. Ketik *Token baru* jika link bermasalah.`)
                 .catch(e => addLog('warn', `WA token send failed: ${e.message}`));
@@ -924,7 +938,7 @@ app.post('/api/admin/user/:id/dashboard-token', isAdmin, async (req, res) => {
 app.post('/api/internal/generate-token/:userId', async (req, res) => {
     const { userId } = req.params;
     const { secret } = req.body;
-    if (secret !== (process.env.INTERNAL_SECRET || 'dompetku-internal')) {
+    if (secret !== (process.env.INTERNAL_SECRET || 'tbs-internal')) {
         return res.status(403).json({ error: 'Forbidden' });
     }
     try {
