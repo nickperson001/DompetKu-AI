@@ -18,9 +18,8 @@ const { initSchedulers } = require('./src/jobs/scheduler');
 const supabase           = require('./src/config/supabase');
 
 const app    = express();
-app.get('/ping', (req, res) => {
-    res.status(200).send('PONG');
-});
+app.get('/ping', (req, res) => res.status(200).send('OK'));
+app.get('/health', (req, res) => res.status(200).send('OK'));
 const server = http.createServer(app);
 const io     = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
