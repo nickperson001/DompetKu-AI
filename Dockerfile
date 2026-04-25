@@ -49,6 +49,7 @@ RUN echo "=== /app ===" && ls -la \
 RUN test -f index.js                     || (echo "MISSING: index.js"                     && exit 1)
 RUN test -f public/index.html            || (echo "MISSING: public/index.html"            && exit 1)
 RUN test -f public/login.html            || (echo "MISSING: public/login.html"            && exit 1)
+RUN test -f public/stock.html            || (echo "MISSING: public/stock.html"            && exit 1)
 RUN test -f src/config/supabase.js       || (echo "MISSING: src/config/supabase.js"       && exit 1)
 RUN test -f src/handlers/message.js      || (echo "MISSING: src/handlers/message.js"      && exit 1)
 RUN test -f src/jobs/scheduler.js        || (echo "MISSING: src/jobs/scheduler.js"        && exit 1)
@@ -59,6 +60,6 @@ RUN echo "=== Semua file OK ==="
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
-    CMD wget -qO- http://localhost:3000/ping || exit 1
+    CMD wget -qO- dompetku-ai-production.up.railway.app/ping || exit 1
 
 CMD ["node", "index.js"]
