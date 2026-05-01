@@ -3,41 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login HQ - DompetKu</title>
+    <title>Login - Tata Bussiness Suite</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #020617; color: #f8fafc; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body { background: #f0f4f8; font-family: 'Inter', sans-serif;}
+        .glass-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            border: 1px solid white;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1), inset 0 2px 0 0 rgba(255, 255, 255, 1);
+        }
+        .btn-3d { box-shadow: 0 4px 6px rgba(0,0,0,0.1), inset 0 -4px 0 rgba(0,0,0,0.15); transition: all 0.1s;}
+        .btn-3d:active { transform: translateY(3px); box-shadow: inset 0 3px 5px rgba(0,0,0,0.1); }
     </style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-6">
-    <div class="w-full max-w-sm glass p-10 rounded-[40px] shadow-2xl">
-        <div class="text-center mb-10">
-            <h1 class="text-4xl font-black text-green-500 tracking-tighter">DompetKu</h1>
-            <p class="text-slate-400 text-xs mt-2 uppercase tracking-widest font-bold">Secure Access</p>
+<body class="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-slate-100 to-slate-200">
+    
+    <div class="w-full max-w-sm glass-card p-10 rounded-[32px]">
+        <div class="text-center mb-10 relative">
+            <div class="w-20 h-20 bg-green-100 rounded-full mx-auto mb-4 flex items-center justify-center shadow-inner">
+                <span class="text-4xl">🔐</span>
+            </div>
+            <h1 class="text-3xl font-black text-slate-800 tracking-tight">Tata Bussiness Suite</h1>
+            <p class="text-slate-500 text-xs mt-2 uppercase tracking-widest font-bold">Secure Access</p>
         </div>
 
-        <form id="loginForm" class="space-y-4">
-                <input 
-    type="text" 
-    id="username" 
-    placeholder="Username" 
-    autocomplete="username" 
-    required 
-    class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
+        <form id="loginForm" class="space-y-5">
+            <input type="text" id="username" placeholder="Username Admin" autocomplete="username" required 
+                class="w-full bg-white border-2 border-slate-200 p-4 rounded-xl font-semibold text-slate-800 placeholder-slate-400 focus:border-green-500 focus:ring-4 focus:ring-green-500/20 outline-none transition shadow-inner">
 
-<input 
-    type="password" 
-    id="password" 
-    placeholder="Password" 
-    autocomplete="current-password" 
-    required 
-    class="w-full bg-slate-800/50 border border-slate-700 p-4 rounded-2xl focus:ring-2 focus:ring-green-500 outline-none transition">
+            <input type="password" id="password" placeholder="Password Security" autocomplete="current-password" required 
+                class="w-full bg-white border-2 border-slate-200 p-4 rounded-xl font-semibold text-slate-800 placeholder-slate-400 focus:border-green-500 focus:ring-4 focus:ring-green-500/20 outline-none transition shadow-inner">
             
-            <button type="submit" id="btn" class="w-full bg-green-600 hover:bg-green-500 py-4 rounded-2xl font-bold transition-all shadow-lg shadow-green-900/30">
-                Masuk ke Dashboard
+            <button type="submit" id="btn" class="btn-3d w-full bg-gradient-to-b from-green-400 to-green-600 text-white py-4 rounded-xl font-extrabold text-lg tracking-wide mt-4">
+                Masuk Dashboard
             </button>
-            <p id="err" class="hidden text-red-400 text-[10px] text-center font-bold">USERNAME ATAU PASSWORD SALAH</p>
+            <p id="err" class="hidden text-red-500 bg-red-50 p-3 rounded-lg text-xs text-center font-bold border border-red-100">USERNAME / PASSWORD SALAH</p>
         </form>
     </div>
 
