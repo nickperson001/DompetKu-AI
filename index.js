@@ -459,7 +459,7 @@ function initWhatsApp() {
         }),
         puppeteer: {
             headless      : true,
-            executablePath: process.env.PUPPETEER_EXEC_PATH || '/usr/bin/chromium',
+            executablePath: process.env.PUPPETEER_EXEC_PATH || undefined,
             args          :[
             '--no-sandbox',
             '--disable-setuid-sandbox',
