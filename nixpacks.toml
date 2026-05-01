@@ -1,3 +1,5 @@
+[phases.setup]
+nixPkgs = ["...", "chromium"]
 aptPkgs =[
     "wget",
     "ca-certificates",
@@ -34,6 +36,5 @@ aptPkgs =[
     "libxss1",
     "libxtst6",
     "lsb-release",
-    "xdg-utils",
-    "chromium"
+    "xdg-utils"
 ]
