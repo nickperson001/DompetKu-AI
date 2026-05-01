@@ -362,44 +362,48 @@ io.on('connection', (socket) => {
     const isAuth = socket.request.session?.authenticated;
     addLog('info', `WS: ${socket.id} [${isAuth ? 'admin' : 'guest'}]`);
 
-    // ✅ FIX: Kirim state terkini segera saat client connect
-    // Jika QR tersedia → langsung tampilkan
-    // Jika sudah ready → konfirmasi status online
     socket.emit('bot_update', {
         status: botStatus,
-        qr    : clientReady ? null : currentQR,  // QR hanya jika belum terhubung
+        qr    : clientReady ? null : currentQR,
         ready : clientReady,
     });
 
     if (isAuth) socket.emit('logs_history', systemLogs.slice(0, 50));
 
+    // PERBAIKAN: HARD RESET ENGINE KETIKA TOMBOL RECONNECT DITEKAN
     socket.on('request_reconnect', async () => {
-        if (!clientReady) {
-            addLog('info', 'Manual reconnect diminta (Hard Reset Engine)');
-            botStatus = 'Reconnecting';
-            currentQR = '';
-            io.emit('bot_update', { status: botStatus, qr: '', ready: false });
-            
-            // 1. Matikan engine WA yang lama agar tidak bentrok RAM
-            if (waClient) {
-                try { await waClient.destroy(); } catch (e) {}
-            }
-            
-            // 2. Bersihkan file sesi WA yang rusak (agar QR pasti turun ulang)
-            try {
-                if (fs.existsSync(WA_SESSION_DIR)) {
-                    fs.rmSync(WA_SESSION_DIR, { recursive: true, force: true });
-                    addLog('info', 'Folder sesi lama berhasil dibersihkan');
-                }
+        addLog('info', 'Manual reconnect diminta (Hard Reset Engine)');
+        botStatus = 'Reconnecting';
+        currentQR = '';
+        clientReady = false;
+        io.emit('bot_update', { status: botStatus, qr: '', ready: false });
+
+        // 1. Matikan engine WA yang lama agar RAM lega (Membunuh Zombie Process)
+        if (waClient) {
+            try { 
+                addLog('warn', 'Menghancurkan proses browser WA lama...');
+                await waClient.destroy(); 
             } catch (e) {
-                console.error('[WA] Gagal hapus folder sesi lama:', e);
+                console.error('Destroy error:', e);
             }
-            
-            // 3. Hidupkan ulang WhatsApp dari keadaan fresh
-            initWhatsApp();
-        } else {
-            socket.emit('bot_update', { status: 'Online', qr: null, ready: true });
+            waClient = null;
         }
+
+        // 2. Bersihkan file sesi WA yang rusak secara tuntas
+        try {
+            if (fs.existsSync(WA_SESSION_DIR)) {
+                fs.rmSync(WA_SESSION_DIR, { recursive: true, force: true });
+                addLog('info', 'Folder sesi lama berhasil dihapus');
+            }
+            fs.mkdirSync(WA_SESSION_DIR, { recursive: true });
+        } catch (e) {
+            console.error('[WA] Gagal hapus folder sesi:', e.message);
+        }
+
+        // 3. Hidupkan ulang WhatsApp dari keadaan fresh (Jeda 2 detik agar OS merilis kunci folder)
+        setTimeout(() => {
+            initWhatsApp();
+        }, 2000);
     });
 
     socket.on('disconnect', () => {
@@ -410,9 +414,7 @@ io.on('connection', (socket) => {
 // ════════════════════════════════════════════════════════════
 // WHATSAPP — Session dir
 // ════════════════════════════════════════════════════════════
-// Volume Railway di-mount ke /.wwebjs_auth — gunakan itu agar
-// session WA tidak hilang saat redeploy
-const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '.wwebjs_auth'); // ✅ FIX: relative path
+const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '.wwebjs_auth');
 
 try {
     if (!fs.existsSync(WA_SESSION_DIR)) {
@@ -440,23 +442,15 @@ async function saveSessionToDB(sessionData) {
 function initWhatsApp() {
     addLog('info', '🔄 Inisialisasi WhatsApp...');
     botStatus = 'Initializing';
+    clientReady = false;
+    currentQR = '';
     try { io.emit('bot_update', { status: botStatus, qr: '', ready: false }); } catch (_) {}
 
-    // Deteksi Chromium
-    const chromiumPaths = [
-        process.env.PUPPETEER_EXEC_PATH,
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/google-chrome',
-    ].filter(Boolean);
-
-    let executablePath;
-    for (const p of chromiumPaths) {
-        if (fs.existsSync(p)) { executablePath = p; break; }
+    // Ekstra safety
+    if (waClient) {
+        try { waClient.destroy(); } catch (e) {}
+        waClient = null;
     }
-
-    console.log(`[WA] Chromium: ${executablePath || 'tidak ditemukan, pakai default'}`);
 
     const client = new Client({
         authStrategy: new LocalAuth({
@@ -465,15 +459,15 @@ function initWhatsApp() {
         }),
         puppeteer: {
             headless      : true,
-            executablePath: process.env.PUPPETEER_EXEC_PATH || usr/bin/chromium,
-            args          : [
+            executablePath: process.env.PUPPETEER_EXEC_PATH || '/usr/bin/chromium',
+            args          :[
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Sangat disarankan untuk menghemat RAM
+            '--single-process', // Krusial untuk efisiensi memori (VPS/Railway)
             '--disable-gpu'
             ],
             timeout: 120_000,
@@ -481,6 +475,9 @@ function initWhatsApp() {
         restartOnAuthFail: true,
         qrMaxRetries     : 10,
     });
+
+    // PERBAIKAN KRUSIAL: DAFTARKAN WACLIENT SEJAK DETIK PERTAMA
+    waClient = client;
 
     client.on('qr', async (qr) => {
         botStatus   = 'Scan QR';
@@ -499,10 +496,16 @@ function initWhatsApp() {
         if (sessionData) await saveSessionToDB(sessionData);
     });
 
-    client.on('auth_failure', (reason) => {
+    // PERBAIKAN: HANCURKAN OTOMATIS BILA GAGAL AUTH
+    client.on('auth_failure', async (reason) => {
         addLog('error', `❌ Auth failure: ${reason}`);
-        botStatus = 'Auth Failed'; clientReady = false; currentQR = ''; waClient = null;
+        botStatus = 'Auth Failed'; clientReady = false; currentQR = ''; 
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
+        
+        if (waClient) {
+            try { await waClient.destroy(); } catch (e) {}
+            waClient = null;
+        }
     });
 
     client.on('ready', () => {
@@ -526,32 +529,31 @@ function initWhatsApp() {
         }
     });
 
+    // PERBAIKAN: HANCURKAN OTOMATIS BILA TERPUTUS
     client.on('disconnected', async (reason) => {
-        botStatus = 'Disconnected'; clientReady = false; 
+        botStatus = 'Disconnected'; clientReady = false; currentQR = '';
         addLog('error', `🔴 WA Terputus: ${reason}`);
-        
-        // Hancurkan proses browser yang hang
+        io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
+
         if (waClient) {
             try { await waClient.destroy(); } catch (e) {}
+            waClient = null;
         }
-        waClient = null; currentQR = '';
-        
-        io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
-        // Reconnect dalam 3 detik
+
         setTimeout(() => { addLog('info', '🔄 Auto-reconnect...'); initWhatsApp(); }, 3_000);
     });
 
+    // PERBAIKAN: HANCURKAN OTOMATIS BILA GAGAL INITIALIZE KARENA JARINGAN
     client.initialize().catch(async (err) => {
         addLog('error', `WA init error: ${err.message}`);
-        botStatus = 'Error'; clientReady = false; 
-        
-        // Hancurkan proses yang gagal inisialisasi
-        if (client) {
-            try { await client.destroy(); } catch (e) {}
-        }
-        waClient = null; currentQR = '';
-        
+        botStatus = 'Error'; clientReady = false; currentQR = '';
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
+        
+        if (waClient) {
+            try { await waClient.destroy(); } catch (e) {}
+            waClient = null;
+        }
+
         setTimeout(() => { addLog('info', '🔄 Retry WA init...'); initWhatsApp(); }, 15_000);
     });
 }
