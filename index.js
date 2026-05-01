@@ -373,16 +373,31 @@ io.on('connection', (socket) => {
 
     if (isAuth) socket.emit('logs_history', systemLogs.slice(0, 50));
 
-    socket.on('request_reconnect', () => {
+    socket.on('request_reconnect', async () => {
         if (!clientReady) {
-            addLog('info', 'Manual reconnect diminta');
-            // Reset state dulu sebelum reinit
+            addLog('info', 'Manual reconnect diminta (Hard Reset Engine)');
             botStatus = 'Reconnecting';
             currentQR = '';
             io.emit('bot_update', { status: botStatus, qr: '', ready: false });
+            
+            // 1. Matikan engine WA yang lama agar tidak bentrok RAM
+            if (waClient) {
+                try { await waClient.destroy(); } catch (e) {}
+            }
+            
+            // 2. Bersihkan file sesi WA yang rusak (agar QR pasti turun ulang)
+            try {
+                if (fs.existsSync(WA_SESSION_DIR)) {
+                    fs.rmSync(WA_SESSION_DIR, { recursive: true, force: true });
+                    addLog('info', 'Folder sesi lama berhasil dibersihkan');
+                }
+            } catch (e) {
+                console.error('[WA] Gagal hapus folder sesi lama:', e);
+            }
+            
+            // 3. Hidupkan ulang WhatsApp dari keadaan fresh
             initWhatsApp();
         } else {
-            // Sudah terhubung — konfirmasi ke client yang baru connect
             socket.emit('bot_update', { status: 'Online', qr: null, ready: true });
         }
     });
@@ -511,21 +526,32 @@ function initWhatsApp() {
         }
     });
 
-    client.on('disconnected', (reason) => {
-        botStatus = 'Disconnected'; clientReady = false; waClient = null;
+    client.on('disconnected', async (reason) => {
+        botStatus = 'Disconnected'; clientReady = false; 
         addLog('error', `🔴 WA Terputus: ${reason}`);
-        io.emit('bot_update', { status: botStatus, ready: false });
-        currentQR = '';
+        
+        // Hancurkan proses browser yang hang
+        if (waClient) {
+            try { await waClient.destroy(); } catch (e) {}
+        }
+        waClient = null; currentQR = '';
+        
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
-        // ✅ FIX: reconnect 3 detik, lebih cepat
+        // Reconnect dalam 3 detik
         setTimeout(() => { addLog('info', '🔄 Auto-reconnect...'); initWhatsApp(); }, 3_000);
     });
 
-    client.initialize().catch((err) => {
+    client.initialize().catch(async (err) => {
         addLog('error', `WA init error: ${err.message}`);
-        botStatus = 'Error'; clientReady = false; waClient = null;
+        botStatus = 'Error'; clientReady = false; 
+        
+        // Hancurkan proses yang gagal inisialisasi
+        if (client) {
+            try { await client.destroy(); } catch (e) {}
+        }
+        waClient = null; currentQR = '';
+        
         io.emit('bot_update', { status: botStatus, ready: false, qr: '' });
-        // ✅ FIX: retry lebih cepat 15 detik
         setTimeout(() => { addLog('info', '🔄 Retry WA init...'); initWhatsApp(); }, 15_000);
     });
 }
