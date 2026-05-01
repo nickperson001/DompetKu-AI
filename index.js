@@ -18,8 +18,6 @@ const { initSchedulers } = require('./src/jobs/scheduler');
 const supabase           = require('./src/config/supabase');
 
 const app    = express();
-app.get('/ping', (req, res) => res.status(200).send('OK'));
-app.get('/health', (req, res) => res.status(200).send('OK'));
 const server = http.createServer(app);
 const io     = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
@@ -452,7 +450,7 @@ function initWhatsApp() {
         }),
         puppeteer: {
             headless      : true,
-            executablePath: process.env.CHROME_BIN || '/usr/bin/chromium',
+            executablePath: process.env.PUPPETEER_EXEC_PATH || undefined,
             args          : [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -561,10 +559,11 @@ server.listen(port, '0.0.0.0', (err) => {
     console.log('\n' + '═'.repeat(52));
     console.log(`  🚀 Server on Running Tata Business Suite`);
     console.log(`  📍 Port      : ${port}`);
-    console.log(`  📍 Login     : dompetku-ai-production.up.railway.app/login`);
-    console.log(`  📍 Dashboard : dompetku-ai-production.up.railway.app/`);
-    console.log(`  📍 Ping      : dompetku-ai-production.up.railway.app/ping`);
-    console.log(`  📍 Health    : dompetku-ai-production.up.railway.app/health`);
+    const _base = process.env.APP_URL || `http://localhost:${port}`;
+    console.log(`  📍 Login     : ${_base}/login`);
+    console.log(`  📍 Dashboard : ${_base}/`);
+    console.log(`  📍 Ping      : ${_base}/ping`);
+    console.log(`  📍 Health    : ${_base}/health`);
     console.log(`  💾 Session   : ${pgPool ? 'PostgreSQL ✅' : 'Memory ⚠️'}`);
     console.log(`  📁 WA Dir    : ${WA_SESSION_DIR}`);
     console.log('═'.repeat(52) + '\n');
@@ -923,7 +922,7 @@ app.post('/api/admin/user/:id/dashboard-token', isAdmin, async (req, res) => {
 
         // Kirim link ke user via WA
         if (clientReady && waClient) {
-            const appUrl = process.env.APP_URL || `dompetku-ai-production.up.railway.app`;
+            const appUrl = (process.env.APP_URL || `http://localhost:${port}`).replace(/\/$/, '');
             const link   = `${appUrl}/stock/${id}?token=${token}`;
             waClient.sendMessage(id, `📦 *Dashboard Stok Anda*\n\nAkses dashboard stok di:\n${link}\n\n⚠️ Jaga kerahasiaan link ini. Ketik *Token baru* jika link bermasalah.`)
                 .catch(e => addLog('warn', `WA token send failed: ${e.message}`));

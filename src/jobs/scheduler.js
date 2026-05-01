@@ -497,7 +497,7 @@ async function checkStockAlerts(client) {
                     }
                 });
                 
-                const appUrl = process.env.APP_URL || 'dompetku-ai-production.up.railway.app';
+                const appUrl = process.env.APP_URL || 'https://your-app.railway.app';
                 // Get user token for dashboard link
                 const { data: uToken } = await supabase.from('users').select('dashboard_token').eq('id', userId).single();
                 if (uToken?.dashboard_token) {

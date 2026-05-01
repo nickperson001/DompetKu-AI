@@ -72,8 +72,8 @@ const PACKAGES = {
         key      : 'unlimited',
         label    : 'UNLIMITED Selamanya',
         emoji    : '💎',
-        price    : 199_000,
-        priceStr : 'Rp 199.000 (sekali bayar)',
+        price    : 499_000,
+        priceStr : 'Rp 499.000 (sekali bayar)',
         duration : null,
         features : [
             'Transaksi tanpa batas per hari',
@@ -466,10 +466,8 @@ async function handleStockInfo(msg, user, rawBody) {
         `⚠️ Minimum    : ${min} ${p.unit}\n` +
         `💎 Nilai Stock: ${formatRupiah(value)}` +
         alert + `\n\n` +
-        `Aksi:\n` +
-        `*Masuk [SKU] [jumlah]* — tambah stock\n` +
-        `*Keluar [SKU] [jumlah]* — kurangi stock\n` +
-        `*Stock history [SKU]* — lihat riwayat`
+        `💡 Kelola stok (tambah/kurangi/opname) via web:\n` +
+        `Ketik *Dashboard* untuk dapat link akses.`
     ), true;
 }
 
@@ -666,7 +664,7 @@ async function handleDashboardRequest(msg, sender, user) {
 }
 
 async function handleNewToken(msg, sender, user) {
-    const appUrl = process.env.APP_URL || 'dompetku-ai-production.up.railway.app';
+    const appUrl = process.env.APP_URL || 'http://localhost:3000';
     const token = crypto.randomBytes(16).toString('hex');
     await supabase.from('users')
         .update({
