@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["...", "chromium"]
+nixPkgs = ["...", "nodejs", "chromium"]
 aptPkgs =[
     "wget",
     "ca-certificates",
