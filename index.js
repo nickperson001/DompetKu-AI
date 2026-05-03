@@ -452,7 +452,33 @@ function initWhatsApp() {
         waClient = null;
     }
 
-    
+const fs = require('fs');
+const path = require('path');
+
+// Menentukan lokasi folder sesi berdasarkan konfigurasi Anda
+// Pastikan WA_SESSION_DIR sudah didefinisikan sebelumnya
+const sessionPath = path.join(__dirname, '.wwebjs_auth', 'session-tbs');
+
+const cleanSingletonLock = () => {
+    const lockFiles = [
+        path.join(sessionPath, 'SingletonLock'),
+        path.join(sessionPath, 'Default', 'SingletonLock')
+    ];
+
+    lockFiles.forEach(file => {
+        if (fs.existsSync(file)) {
+            try {
+                fs.unlinkSync(file);
+                console.log(`[SYSTEM] Menghapus file kunci sisa: ${file}`);
+            } catch (err) {
+                console.warn(`[WARNING] Gagal menghapus file kunci (mungkin sedang digunakan): ${err.message}`);
+            }
+        }
+    });
+};
+
+// Jalankan pembersihan sebelum inisialisasi client
+cleanSingletonLock();
 
     const client = new Client({
         authStrategy: new LocalAuth({
@@ -976,34 +1002,3 @@ app.post('/api/internal/generate-token/:userId', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-
-// ==========================================
-// PENANGANAN GRACEFUL SHUTDOWN
-// ==========================================
-
-/**
- * Fungsi untuk menutup semua proses bot secara bersih
- * agar tidak meninggalkan SingletonLock di Chromium.
- */
-const shutdown = async (signal) => {
-    console.log(`\n[SYSTEM] Menerima sinyal ${signal}. Memulai prosedur shutdown...`);
-    
-    try {
-        if (client) {
-            // client.destroy() menutup browser Puppeteer dengan benar
-            await client.destroy();
-            console.log('[SYSTEM] Browser berhasil ditutup secara aman.');
-        }
-    } catch (err) {
-        console.error('[ERROR] Gagal menutup browser secara bersih:', err);
-    } finally {
-        console.log('[SYSTEM] Tata Business Suite dihentikan.');
-        process.exit(0);
-    }
-};
-
-// Railway mengirimkan sinyal SIGTERM saat redeploy atau restart kontainer
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-// SIGINT biasanya dikirim saat menekan CTRL+C di terminal lokal
-process.on('SIGINT', () => shutdown('SIGINT'));
