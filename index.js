@@ -452,6 +452,8 @@ function initWhatsApp() {
         waClient = null;
     }
 
+    
+
     const client = new Client({
         authStrategy: new LocalAuth({
             dataPath: WA_SESSION_DIR,
@@ -974,3 +976,34 @@ app.post('/api/internal/generate-token/:userId', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
+// ==========================================
+// PENANGANAN GRACEFUL SHUTDOWN
+// ==========================================
+
+/**
+ * Fungsi untuk menutup semua proses bot secara bersih
+ * agar tidak meninggalkan SingletonLock di Chromium.
+ */
+const shutdown = async (signal) => {
+    console.log(`\n[SYSTEM] Menerima sinyal ${signal}. Memulai prosedur shutdown...`);
+    
+    try {
+        if (client) {
+            // client.destroy() menutup browser Puppeteer dengan benar
+            await client.destroy();
+            console.log('[SYSTEM] Browser berhasil ditutup secara aman.');
+        }
+    } catch (err) {
+        console.error('[ERROR] Gagal menutup browser secara bersih:', err);
+    } finally {
+        console.log('[SYSTEM] Tata Business Suite dihentikan.');
+        process.exit(0);
+    }
+};
+
+// Railway mengirimkan sinyal SIGTERM saat redeploy atau restart kontainer
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// SIGINT biasanya dikirim saat menekan CTRL+C di terminal lokal
+process.on('SIGINT', () => shutdown('SIGINT'));
