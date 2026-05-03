@@ -414,7 +414,7 @@ io.on('connection', (socket) => {
 // ════════════════════════════════════════════════════════════
 // WHATSAPP — Session dir
 // ════════════════════════════════════════════════════════════
-const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '.wwebjs_auth');
+const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '/app/.wwebjs_auth');
 
 try {
     if (!fs.existsSync(WA_SESSION_DIR)) {
@@ -452,33 +452,32 @@ function initWhatsApp() {
         waClient = null;
     }
 
-const fs = require('fs');
-const path = require('path');
 
-// Menentukan lokasi folder sesi berdasarkan konfigurasi Anda
-// Pastikan WA_SESSION_DIR sudah didefinisikan sebelumnya
-const sessionPath = path.join(__dirname, '.wwebjs_auth', 'session-tbs');
+const sessionPath = path.join(WA_SESSION_DIR, `session-${clientId}`);
 
-const cleanSingletonLock = () => {
-    const lockFiles = [
+const cleanupSession = () => {
+    console.log('[SYSTEM] Memeriksa sisa kunci sesi di Volume...');
+    const filesToFiles = [
         path.join(sessionPath, 'SingletonLock'),
+        path.join(sessionPath, 'SingletonCookie'),
+        path.join(sessionPath, 'SingletonSocket'),
         path.join(sessionPath, 'Default', 'SingletonLock')
     ];
 
-    lockFiles.forEach(file => {
+    filesToFiles.forEach((file) => {
         if (fs.existsSync(file)) {
             try {
                 fs.unlinkSync(file);
-                console.log(`[SYSTEM] Menghapus file kunci sisa: ${file}`);
+                console.log(`[CLEANUP] Berhasil menghapus: ${path.basename(file)}`);
             } catch (err) {
-                console.warn(`[WARNING] Gagal menghapus file kunci (mungkin sedang digunakan): ${err.message}`);
+                console.warn(`[CLEANUP] Tidak bisa menghapus ${path.basename(file)}: ${err.message}`);
             }
         }
     });
 };
 
-// Jalankan pembersihan sebelum inisialisasi client
-cleanSingletonLock();
+// Eksekusi pembersihan
+cleanupSession();
 
     const client = new Client({
         authStrategy: new LocalAuth({
@@ -496,7 +495,8 @@ cleanSingletonLock();
             '--no-first-run',
             '--no-zygote',
             '--single-process', // Krusial untuk efisiensi memori (VPS/Railway)
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-extensions'
             ],
             timeout: 120_000,
         },
