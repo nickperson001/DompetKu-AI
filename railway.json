@@ -4,8 +4,7 @@
     "builder": "DOCKERFILE"
   },
   "deploy": {
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 3,
-    "numReplicas": 1
+    "numReplicas": 1,
+    "sleepApplication": false
   }
 }
