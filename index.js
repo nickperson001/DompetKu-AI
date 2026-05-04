@@ -453,56 +453,59 @@ function initWhatsApp() {
     }
 
 
+const clientId = 'tbs';
 const sessionPath = path.join(WA_SESSION_DIR, `session-${clientId}`);
 
-const cleanupSession = () => {
-    console.log('[SYSTEM] Memeriksa sisa kunci sesi di Volume...');
-    const filesToFiles = [
+// 2. FUNGSI PEMBERSIH PAKSA (Jalan pertama kali)
+const forceClearLocks = () => {
+    console.log('[SYSTEM] Memeriksa dan menghancurkan Lock Files di Volume...');
+    const lockFiles = [
         path.join(sessionPath, 'SingletonLock'),
         path.join(sessionPath, 'SingletonCookie'),
         path.join(sessionPath, 'SingletonSocket'),
         path.join(sessionPath, 'Default', 'SingletonLock')
     ];
 
-    filesToFiles.forEach((file) => {
+    lockFiles.forEach(file => {
         if (fs.existsSync(file)) {
             try {
-                fs.unlinkSync(file);
-                console.log(`[CLEANUP] Berhasil menghapus: ${path.basename(file)}`);
+                // rmSync lebih kuat dari unlinkSync
+                fs.rmSync(file, { force: true, recursive: true });
+                console.log(`✅ Lock dihancurkan: ${path.basename(file)}`);
             } catch (err) {
-                console.warn(`[CLEANUP] Tidak bisa menghapus ${path.basename(file)}: ${err.message}`);
+                console.error(`❌ Gagal menghancurkan ${path.basename(file)}:`, err.message);
             }
         }
     });
 };
 
-// Eksekusi pembersihan
-cleanupSession();
+// Eksekusi pembersih SEBELUM inisialisasi
+forceClearLocks();
 
-    const client = new Client({
-        authStrategy: new LocalAuth({
-            dataPath: WA_SESSION_DIR,
-            clientId: 'tbs',
-        }),
-        puppeteer: {
-            headless      : true,
-            executablePath: process.env.NODE_ENV === 'production' ? '/usr/bin/chromium' : null,
-            args          :[
+// 3. INISIALISASI CLIENT DENGAN PENGATURAN DOCKER MAKSIMAL
+const client = new Client({
+    authStrategy: new LocalAuth({
+        dataPath: WA_SESSION_DIR,
+        clientId: clientId,
+    }),
+    puppeteer: {
+        headless: true,
+        executablePath: process.env.NODE_ENV === 'production' ? '/usr/bin/chromium' : null,
+        args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Krusial untuk efisiensi memori (VPS/Railway)
-            '--disable-gpu',
-            '--disable-extensions'
-            ],
-            timeout: 120_000,
-        },
-        restartOnAuthFail: true,
-        qrMaxRetries     : 10,
-    });
+            '--single-process',
+            '--disable-gpu'
+        ],
+        timeout: 120_000,
+    },
+    restartOnAuthFail: true,
+    qrMaxRetries: 10,
+});
 
     // PERBAIKAN KRUSIAL: DAFTARKAN WACLIENT SEJAK DETIK PERTAMA
     waClient = client;
@@ -584,6 +587,24 @@ cleanupSession();
 
         setTimeout(() => { addLog('info', '🔄 Retry WA init...'); initWhatsApp(); }, 15_000);
     });
+
+    client.initialize();
+
+// 4. GRACEFUL SHUTDOWN (Mencegah lock di kemudian hari)
+const shutdown = async (signal) => {
+    console.log(`\n[SYSTEM] Menerima sinyal ${signal}. Menutup proses...`);
+    try {
+        if (client) await client.destroy();
+        console.log('✅ Browser tertutup dengan aman.');
+    } catch (err) {
+        console.error('❌ Gagal menutup browser:', err);
+    } finally {
+        process.exit(0);
+    }
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 // ════════════════════════════════════════════════════════════
