@@ -414,7 +414,7 @@ io.on('connection', (socket) => {
 // ════════════════════════════════════════════════════════════
 // WHATSAPP — Session dir
 // ════════════════════════════════════════════════════════════
-const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '/app/.wwebjs_auth');
+const WA_SESSION_DIR = process.env.WA_SESSION_DIR || path.join(__dirname, '.wwebjs_auth');
 
 try {
     if (!fs.existsSync(WA_SESSION_DIR)) {
