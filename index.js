@@ -437,16 +437,16 @@ async function saveSessionToDB(sessionData) {
 }
 
 // Membuat server sederhana agar Railway tidak mematikan bot (Healthcheck)
-const server = http.createServer((req, res) => {
+const healthCheckServer = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Tata Business Suite is Active\n');
 });
 
-// Railway memberikan port melalui process.env.PORT secara otomatis
-const PORT = process.env.PORT || 3000;
+// Pastikan variabel port juga unik jika perlu, tapi PORT biasanya aman
+const HEALTH_PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
-    console.log(`[HEALTHCHECK] Server aktif di port ${PORT}`);
+healthCheckServer.listen(HEALTH_PORT, () => {
+    console.log(`[HEALTHCHECK] Server aktif di port ${HEALTH_PORT}`);
 });
 
 // ════════════════════════════════════════════════════════════
