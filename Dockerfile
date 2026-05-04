@@ -1,5 +1,5 @@
 # Gunakan versi Node.js yang sesuai dengan engines (>=18.0.0)
-FROM node:18-bullseye-slim
+FROM node:node:20-slim
 
 # Instal Chromium dan semua dependensi sistem yang dibutuhkan
 RUN apt-get update && apt-get install -y \
